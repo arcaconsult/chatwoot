@@ -94,6 +94,28 @@ module Custom::ActionCableListener
       (member.teams.where(account_id: account.id).pluck(:name) & matching_labels).any?
     end.map(&:pubsub_token)
 
+    notify_excluded_agents(account, conversation, excluded_tokens)
+
     tokens - excluded_tokens
+  end
+
+  # A stale copy left in an excluded agent's already-open sidebar cannot be fixed by simply
+  # not sending them further updates about it (what `tokens - excluded_tokens` above
+  # achieves on its own) -- the browser just keeps showing whatever it last knew, until the
+  # agent switches tabs/filters or reloads. This sends the ones who just lost access a
+  # separate, minimal signal to drop it from their local list immediately.
+  #
+  # 'conversation.removed' is not a registered Events::Types constant (no CE code emits or
+  # listens for it) because it doesn't need to be -- ActionCableBroadcastJob only special-
+  # cases event names it recognises (CONVERSATION_UPDATE_EVENTS, which rebuilds the payload
+  # from a fresh read); anything else, this included, passes through exactly as given. The
+  # payload carries nothing but the id the recipient's browser already has from before this
+  # conversation became segregated, so this discloses nothing new. The matching frontend
+  # handler lives in app/javascript/dashboard/helper/actionCable.js (outside custom/ -- see
+  # that file's own comment for why this is the one part of the fix that isn't).
+  def notify_excluded_agents(account, conversation, excluded_tokens)
+    return if excluded_tokens.empty?
+
+    broadcast(account, excluded_tokens, 'conversation.removed', { id: conversation.display_id })
   end
 end

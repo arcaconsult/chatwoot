@@ -74,6 +74,7 @@ class ActionCableConnector extends BaseActionCableConnector {
       'notification.updated': this.onNotificationUpdated,
       'conversation.read': this.onConversationRead,
       'conversation.updated': this.onConversationUpdated,
+      'conversation.removed': this.onConversationRemoved,
       'conversation.unread_count_changed':
         this.onConversationUnreadCountChanged,
       'account.cache_invalidated': this.onCacheInvalidate,
@@ -229,6 +230,16 @@ class ActionCableConnector extends BaseActionCableConnector {
   onConversationUpdated = data => {
     this.app.$store.dispatch('updateConversation', data);
     this.fetchConversationStats();
+  };
+
+  // Arcaconsult: the counterpart to custom/app/listeners/custom/action_cable_listener.rb's
+  // notify_excluded_agents -- a segregated-label conversation this browser already had open
+  // gets dropped from the local list the instant access is revoked, instead of lingering
+  // until the next tab switch or reload. commit (not dispatch('deleteConversation')) on
+  // purpose: that action calls ConversationApi.delete, an actual server-side delete this is
+  // not -- only this one browser's own copy goes away.
+  onConversationRemoved = data => {
+    this.app.$store.commit('DELETE_CONVERSATION', data.id);
   };
 
   onScheduledMessageCreated = data => {
