@@ -30,7 +30,7 @@ module Custom::Conversations::PermissionFilterService
     return scope if administrator? || agent_bot?
     return scope if forbidden_labels.empty?
 
-    hidden_ids = account.conversations.tagged_with(forbidden_labels, any: true).select(:id)
+    hidden_ids = account.conversations.tagged_with(forbidden_labels, any: true).pluck(:id)
     scope.where.not(id: hidden_ids)
   end
 
