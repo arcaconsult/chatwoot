@@ -45,13 +45,23 @@ module Chatwoot
     config.eager_load_paths << Rails.root.join('enterprise/listeners')
     # rubocop:disable Rails/FilePath
     config.eager_load_paths += Dir["#{Rails.root}/enterprise/app/**"]
+    config.eager_load_paths += Dir["#{Rails.root}/custom/app/**"] if Rails.root.join('custom').exist?
     # rubocop:enable Rails/FilePath
     # Add enterprise views to the view paths
     config.paths['app/views'].unshift('enterprise/app/views')
+    config.paths['app/views'].unshift('custom/app/views') if Rails.root.join('custom').exist?
 
     # Load enterprise initializers alongside standard initializers
     enterprise_initializers = Rails.root.join('enterprise/config/initializers')
     Dir[enterprise_initializers.join('**/*.rb')].each { |f| require f } if enterprise_initializers.exist?
+
+    # Arcaconsult: mirrors the enterprise/ loading above for our own custom/ extension layer.
+    # ChatwootApp.extensions already returns ['enterprise', 'custom'] once custom/ exists (see
+    # lib/chatwoot_app.rb), so InjectEnterpriseEditionModule (config/initializers/01_inject_
+    # enterprise_edition_module.rb) picks up any Custom::<X> module automatically once Rails
+    # can see the files -- that is all this block does.
+    custom_initializers = Rails.root.join('custom/config/initializers')
+    Dir[custom_initializers.join('**/*.rb')].each { |f| require f } if custom_initializers.exist?
 
     # Settings in config/environments/* take precedence over those specified here.
     # Application configuration can go into files in config/initializers
