@@ -15,7 +15,14 @@ module Whatsapp::BaileysHandlers::Helpers # rubocop:disable Metrics/ModuleLength
   PHONE_JID_SERVERS = %w[s.whatsapp.net c.us].freeze
   LID_JID_SERVER = 'lid'.freeze
 
+  # NOTE (Arcaconsult patch): Baileys manda um frame inicial de notificacao
+  # para midia de visualizacao unica sem a chave `message` (so isViewOnce:
+  # true, o conteudo chega depois). unwrap_message_content assumia que msg
+  # era sempre um Hash e quebrava com NoMethodError em nil, mandando o job
+  # do Sidekiq pra fila morta. Default para {} para cair na classificacao
+  # existente 'unsupported' em vez de estourar excecao.
   def unwrap_message_content(msg)
+    msg ||= {}
     5.times do
       wrapper_key = MESSAGE_WRAPPER_KEYS.find { |key| msg.key?(key) }
       break unless wrapper_key
