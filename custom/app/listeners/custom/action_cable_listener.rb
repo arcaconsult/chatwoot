@@ -4,9 +4,14 @@
 # `conversation.inbox.members` with no authorization check at all -- CE's own
 # ActionCableListener was written on the assumption "an inbox member may see everything
 # in that inbox", which our label-based segregation breaks. Without this file, a browser
-# that already has the dashboard open receives the push the instant a segregated label is
+# that already has the dashboard open receives the push the instant a segregating label is
 # added or a segregated conversation is resolved, regardless of what ConversationPolicy or
 # PermissionFilterService would say if asked -- neither of them sits anywhere on this path.
+#
+# Same dynamic rule as the other two custom/ files: the segregated-label set is not a fixed
+# list, it is read live from `account.teams` on every call. See the long comment in
+# conversation_policy.rb for what that trades away (any team name automatically starts
+# restricting a same-named label, no separate review step) and why it was chosen anyway.
 #
 # Scope, deliberately narrowed: this only overrides the five handlers whose payload
 # actually reaches what an agent sees in the sidebar/conversation header (created, updated,
@@ -27,12 +32,11 @@
 # rule, just restated for a class where breaking it would be a concurrency bug rather than
 # a subtler correctness one.
 #
-# Same SEGREGATED_LABELS list, same lowercase-because-the-models-downcase-on-save reasoning
-# as the other two files -- see the long comment in conversation_policy.rb.
+# Both Team#name and Label#title are downcased by their own model callbacks before saving
+# (before_validation), so comparing them directly (no explicit .downcase needed on either
+# side) is correct by construction.
 module Custom::ActionCableListener
   include Events::Types
-
-  SEGREGATED_LABELS = %w[financeiro suporte comercial].freeze
 
   def conversation_created(event)
     conversation, account = extract_conversation_and_account(event)
@@ -84,7 +88,8 @@ module Custom::ActionCableListener
   def visible_user_tokens(account, conversation)
     tokens = user_tokens(account, conversation.inbox.members)
 
-    matching_labels = conversation.cached_label_list_array & SEGREGATED_LABELS
+    account_team_names = account.teams.pluck(:name)
+    matching_labels = conversation.cached_label_list_array & account_team_names
     return tokens if matching_labels.empty?
 
     excluded_tokens = conversation.inbox.members.reject do |member|
