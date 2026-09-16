@@ -671,7 +671,35 @@ function onToggleAdvanceFiltersModal() {
   showAdvancedFilters.value = true;
 }
 
+// ARCACONSULT: a aba 'group' precisa de um fetch isolado — o pipeline padrão
+// (fetchAllConversations → buildConversationList) sobrescreve os stats globais
+// com valores filtrados por grupo, desestabilizando os contadores das outras abas.
+async function fetchGroupConversationsList() {
+  store.commit('SET_LIST_LOADING_STATUS');
+  try {
+    const filters = conversationFilters.value;
+    const { data } = await ConversationAPI.get(filters);
+    store.commit('SET_ALL_CONVERSATION', data.data.payload);
+    store.dispatch('conversationPage/setCurrentPage', {
+      filter: 'group',
+      page: filters.page,
+    });
+    if (!data.data.payload.length) {
+      store.dispatch('conversationPage/setEndReached', { filter: 'group' });
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[ARCACONSULT] fetchGroupConversationsList falhou:', error);
+  } finally {
+    store.commit('CLEAR_LIST_LOADING_STATUS');
+  }
+}
+
 function fetchConversations() {
+  if (activeAssigneeTab.value === 'group') {
+    fetchGroupConversationsList();
+    return;
+  }
   store.dispatch('updateChatListFilters', conversationFilters.value);
   store.dispatch('fetchAllConversations').then(emitConversationLoaded);
 }
@@ -957,7 +985,14 @@ useEmitter(BUS_EVENTS.OPEN_CONVERSATION_GONE, () =>
 
 useEmitter('fetch_conversation_stats', () => {
   if (hasAppliedFiltersOrActiveFolders.value) return;
-  store.dispatch('conversationStats/get', conversationFilters.value);
+  // ARCACONSULT: quando na aba 'group', os filtros incluem groupType que
+  // contaminaria os contadores compartilhados — busca stats sem esse filtro.
+  if (activeAssigneeTab.value === 'group') {
+    const baseFilters = { ...conversationFilters.value, groupType: undefined };
+    store.dispatch('conversationStats/get', baseFilters);
+  } else {
+    store.dispatch('conversationStats/get', conversationFilters.value);
+  }
   fetchGroupConversationsCount();
 });
 
@@ -976,6 +1011,9 @@ useEmitter('fetch_conversation_stats', () => {
 const reconcileTab = debounce(
   async () => {
     if (chatListLoading.value || hasAppliedFiltersOrActiveFolders.value) return;
+    // ARCACONSULT: a aba 'group' usa assigneeType='all' internamente, e o
+    // reconcile compararia contra dados do 'all' real — skip.
+    if (activeAssigneeTab.value === 'group') return;
     if (conversationList.value.length <= activeAssigneeTabCount.value) return;
 
     await store.dispatch('reconcileConversationTab', conversationFilters.value);
