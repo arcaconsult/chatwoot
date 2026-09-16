@@ -215,6 +215,27 @@ const assigneeTabPermissions = computed(() => {
   });
 });
 
+// ARCACONSULT: contador independente pra aba sintética "Grupos" — não usa o
+// módulo conversationStats compartilhado (que sobrescreveria o número das
+// outras 3 abas quando a busca rodasse com groupType: 'group').
+const groupConversationsCount = ref(0);
+
+const fetchGroupConversationsCount = async () => {
+  try {
+    const { data } = await ConversationAPI.meta({
+      inboxId: props.conversationInbox,
+      status: activeStatus.value,
+      assigneeType: wootConstants.ASSIGNEE_TYPE.ALL,
+      teamId: props.teamId || undefined,
+      conversationType: props.conversationType || undefined,
+      groupType: 'group',
+    });
+    groupConversationsCount.value = data?.meta?.all_count || 0;
+  } catch (error) {
+    // ignore, mirrors the shared stats module's own failure handling
+  }
+};
+
 const assigneeTabItems = computed(() => {
   const items = filterItemsByPermission(
     assigneeTabPermissions.value,
@@ -229,6 +250,7 @@ const assigneeTabItems = computed(() => {
   items.push({
     key: 'group',
     name: t('CHAT_LIST.ASSIGNEE_TYPE_TABS.group'),
+    count: groupConversationsCount.value,
   });
 
   return items;
@@ -933,6 +955,7 @@ useEmitter(BUS_EVENTS.OPEN_CONVERSATION_GONE, () =>
 useEmitter('fetch_conversation_stats', () => {
   if (hasAppliedFiltersOrActiveFolders.value) return;
   store.dispatch('conversationStats/get', conversationFilters.value);
+  fetchGroupConversationsCount();
 });
 
 // The list can only ever be a subset of what the server counts for the tab, so a list longer than
@@ -988,6 +1011,7 @@ onMounted(() => {
   store.dispatch('setChatSortFilter', activeSortBy.value);
   store.dispatch('setChatGroupTypeFilter', activeGroupType.value);
   resetAndFetchData();
+  fetchGroupConversationsCount();
   if (hasActiveFolders.value) {
     store.dispatch('campaigns/get');
   }
@@ -1067,6 +1091,7 @@ watch(chatLists, () => {
 watch(conversationFilters, (newVal, oldVal) => {
   if (newVal !== oldVal) {
     store.dispatch('updateChatListFilters', newVal);
+    fetchGroupConversationsCount();
   }
 });
 </script>
