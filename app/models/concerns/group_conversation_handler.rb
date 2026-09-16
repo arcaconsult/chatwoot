@@ -54,8 +54,12 @@ module GroupConversationHandler # rubocop:disable Metrics/ModuleLength
     sender_contact_inbox.contact
   end
 
+  # ARCACONSULT: grupo é uma thread única e perpétua -- reaproveita a conversa mesmo
+  # resolvida, em vez de abrir uma nova a cada mensagem depois de fechar. O reopen
+  # (Message#reopen_conversation) já cuida de tirar do status resolvido quando chega
+  # mensagem nova; aqui só garantimos que é sempre a MESMA conversa que recebe.
   def find_or_create_group_conversation(group_contact_inbox)
-    @conversation = group_contact_inbox.conversations.where(status: %i[open pending]).last
+    @conversation = group_contact_inbox.conversations.last
     if @conversation.present?
       @conversation.update!(group_type: :group) unless @conversation.group_type_group?
       return @conversation
