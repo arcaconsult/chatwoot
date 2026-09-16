@@ -413,6 +413,10 @@ export const AUTOMATIONS = {
         name: 'REMOVE_ASSIGNED_TEAM',
       },
       {
+        key: 'remove_assigned_bot',
+        name: 'REMOVE_ASSIGNED_BOT',
+      },
+      {
         key: 'assign_agent',
         name: 'ASSIGN_AGENT',
       },
@@ -774,6 +778,11 @@ export const AUTOMATION_ACTION_TYPES = [
   {
     key: 'remove_assigned_team',
     label: 'REMOVE_ASSIGNED_TEAM',
+    inputType: null,
+  },
+  {
+    key: 'remove_assigned_bot',
+    label: 'REMOVE_ASSIGNED_BOT',
     inputType: null,
   },
   {
