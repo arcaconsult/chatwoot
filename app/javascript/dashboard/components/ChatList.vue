@@ -223,7 +223,7 @@ const groupConversationsCount = ref(0);
 const fetchGroupConversationsCount = async () => {
   try {
     const { data } = await ConversationAPI.meta({
-      inboxId: props.conversationInbox,
+      inboxId: props.conversationInbox ? props.conversationInbox : undefined,
       status: activeStatus.value,
       assigneeType: wootConstants.ASSIGNEE_TYPE.ALL,
       teamId: props.teamId || undefined,
