@@ -216,7 +216,7 @@ const assigneeTabPermissions = computed(() => {
 });
 
 const assigneeTabItems = computed(() => {
-  return filterItemsByPermission(
+  const items = filterItemsByPermission(
     assigneeTabPermissions.value,
     userPermissions.value,
     item => item.permissions
@@ -225,6 +225,13 @@ const assigneeTabItems = computed(() => {
     name: t(`CHAT_LIST.ASSIGNEE_TYPE_TABS.${key}`),
     count: conversationStats.value[countKey] || 0,
   }));
+
+  items.push({
+    key: 'group',
+    name: t('CHAT_LIST.ASSIGNEE_TYPE_TABS.group'),
+  });
+
+  return items;
 });
 
 const showAssigneeInConversationCard = computed(() => {
@@ -287,16 +294,17 @@ const conversationListPagination = computed(() => {
 });
 
 const conversationFilters = computed(() => {
+  const isGroupTab = activeAssigneeTab.value === 'group';
   return {
     inboxId: props.conversationInbox ? props.conversationInbox : undefined,
-    assigneeType: activeAssigneeTab.value,
+    assigneeType: isGroupTab ? wootConstants.ASSIGNEE_TYPE.ALL : activeAssigneeTab.value,
     status: activeStatus.value,
     sortBy: activeSortBy.value,
     page: conversationListPagination.value,
     labels: props.label ? [props.label] : undefined,
     teamId: props.teamId || undefined,
     conversationType: props.conversationType || undefined,
-    groupType: activeGroupType.value || undefined,
+    groupType: isGroupTab ? 'group' : (activeGroupType.value || undefined),
   };
 });
 
