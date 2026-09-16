@@ -232,7 +232,10 @@ const fetchGroupConversationsCount = async () => {
     });
     groupConversationsCount.value = data?.meta?.all_count || 0;
   } catch (error) {
-    // ignore, mirrors the shared stats module's own failure handling
+    // ARCACONSULT: erro tem que ficar visível — silenciar aqui só esconderia
+    // o problema em vez de resolvê-lo.
+    // eslint-disable-next-line no-console
+    console.error('[ARCACONSULT] fetchGroupConversationsCount falhou:', error);
   }
 };
 
