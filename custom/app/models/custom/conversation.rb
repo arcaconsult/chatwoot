@@ -10,9 +10,14 @@
 module Custom::Conversation
   def self.prepended(base)
     base.after_create :label_by_creating_agent_team
+    base.after_create :label_and_exclude_bot_for_group_conversations
   end
 
   def set_active_bot_conversation
+    # ARCACONSULT: conversa de grupo nunca fica com o bot — nem pending, nem
+    # atribuída a ele. Sem isso, o gate de ownership do fazer.ai agents nunca
+    # teria motivo pra recusar o turno, e a IA respondia grupo normalmente.
+    return if group_type_group?
     return assign_to_creating_agent if Current.user.present?
 
     super
@@ -37,5 +42,11 @@ module Custom::Conversation
     return unless teams.count == 1
 
     update!(label_list: [teams.first.name.downcase])
+  end
+
+  def label_and_exclude_bot_for_group_conversations
+    return unless group_type_group?
+
+    update!(label_list: (label_list + ['grupo']).uniq)
   end
 end
