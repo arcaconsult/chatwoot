@@ -18,8 +18,7 @@
     "ASSIGNEE_TYPE_TABS": {
       "me": "Minhas",
       "unassigned": "Não atribuídas",
-      "all": "Todos",
-      "group": "Grupos"
+      "all": "Todos"
     },
     "CHAT_STATUS_FILTER_ITEMS": {
       "open": {

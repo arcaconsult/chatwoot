@@ -8,7 +8,8 @@
       "TEMPLATE_USE": "Use this template"
     },
     "ACTIONS": {
-      "CREATE_SCHEDULED_MESSAGE": "Create Scheduled Message"
+      "CREATE_SCHEDULED_MESSAGE": "Create Scheduled Message",
+      "REMOVE_ASSIGNED_BOT": "Remove Assigned Bot"
     },
     "ATTRIBUTES": {
       "SENDER": "Sender",

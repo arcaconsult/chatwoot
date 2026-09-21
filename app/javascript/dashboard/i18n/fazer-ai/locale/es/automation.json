@@ -8,7 +8,8 @@
       "TEMPLATE_USE": "Usar esta plantilla"
     },
     "ACTIONS": {
-      "CREATE_SCHEDULED_MESSAGE": "Crear mensaje programado"
+      "CREATE_SCHEDULED_MESSAGE": "Crear mensaje programado",
+      "REMOVE_ASSIGNED_BOT": "Quitar bot asignado"
     },
     "ATTRIBUTES": {
       "SENDER": "Remitente",

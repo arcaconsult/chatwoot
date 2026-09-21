@@ -8,7 +8,8 @@
       "TEMPLATE_USE": "Usar este template"
     },
     "ACTIONS": {
-      "CREATE_SCHEDULED_MESSAGE": "Criar Mensagem Agendada"
+      "CREATE_SCHEDULED_MESSAGE": "Criar Mensagem Agendada",
+      "REMOVE_ASSIGNED_BOT": "Remover Agente Bot"
     },
     "ATTRIBUTES": {
       "SENDER": "Remetente",
