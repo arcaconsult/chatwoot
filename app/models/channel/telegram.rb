@@ -70,7 +70,10 @@ class Channel::Telegram < ApplicationRecord
   end
 
   def chat_id(message)
-    message.conversation[:additional_attributes]['chat_id']
+    # ARCACONSULT: conversas de grupo (GroupConversationHandler) não gravam chat_id em
+    # additional_attributes; o contact_inbox do contato-grupo já guarda o chat_id como
+    # source_id (extract_group_source_id), então cai pra ele quando não achar o outro.
+    message.conversation[:additional_attributes]['chat_id'] || message.conversation.contact_inbox&.source_id
   end
 
   def business_connection_id(message)

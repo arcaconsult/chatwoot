@@ -8,6 +8,18 @@ module Telegram::ParamHelpers
     params.dig(:message, :chat, :type) == 'private'
   end
 
+  # ARCACONSULT: grupos e supergrupos do Telegram viram conversas de grupo,
+  # no mesmo padrão do GroupConversationHandler usado pelo WhatsApp.
+  def group_message?
+    return false if callback_query_params?
+
+    %w[group supergroup].include?(params.dig(:message, :chat, :type))
+  end
+
+  def telegram_params_chat_title
+    telegram_params_base_object[:chat][:title]
+  end
+
   def telegram_params_content_attributes
     reply_to = params.dig(:message, :reply_to_message, :message_id)
     return { 'in_reply_to_external_id' => reply_to } if reply_to

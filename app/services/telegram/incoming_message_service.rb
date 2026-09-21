@@ -1,16 +1,30 @@
 # Find the various telegram payload samples here: https://core.telegram.org/bots/webhooks#testing-your-bot-with-updates
 # https://core.telegram.org/bots/api#available-types
 
-class Telegram::IncomingMessageService
+# ARCACONSULT: o suporte a grupo/supergrupo somou o handler de grupo e os métodos
+# abstratos do GroupConversationHandler à classe, que passou de 168 para 213 linhas
+# contáveis (limite 175). Extrair para um concern próprio, como o Baileys faz, é a
+# alternativa -- fica registrada aqui caso o arquivo volte a crescer.
+class Telegram::IncomingMessageService # rubocop:disable Metrics/ClassLength
   include ::FileTypeHelper
   include ::Telegram::ParamHelpers
+  include ::GroupConversationHandler
   pattr_initialize [:inbox!, :params!]
 
   def perform
-    # chatwoot doesn't support group conversations at the moment
     transform_business_message!
-    return unless private_message?
+    return unless private_message? || group_message?
 
+    if group_message?
+      perform_group_message
+    else
+      perform_private_message
+    end
+  end
+
+  private
+
+  def perform_private_message
     set_contact
     update_contact_avatar
     set_conversation
@@ -21,12 +35,27 @@ class Telegram::IncomingMessageService
     # 1. Send the read request to Telegram here, immediately when the message is created.
     # 2. Properly update the read status in the Chatwoot UI and trigger the Telegram request when the agent actually reads the message.
     # See: https://core.telegram.org/bots/api#readbusinessmessage
+    build_and_save_message(sender: message_sender)
+  end
+
+  # ARCACONSULT: mensagem de grupo/supergrupo. Cria o contato-grupo, o contato do
+  # remetente e a thread única do grupo, no mesmo padrão do WhatsApp/Baileys.
+  def perform_group_message
+    @group_contact_inbox, @group_contact = find_or_create_group_contact
+    @sender_contact = find_or_create_sender_contact
+    update_sender_avatar
+    @conversation = find_or_create_group_conversation(@group_contact_inbox)
+    add_group_member(@group_contact, @sender_contact) if @sender_contact
+    build_and_save_message(sender: @sender_contact)
+  end
+
+  def build_and_save_message(sender:)
     @message = @conversation.messages.build(
       content: telegram_params_message_content,
       account_id: @inbox.account_id,
       inbox_id: @inbox.id,
       message_type: message_type,
-      sender: message_sender,
+      sender: sender,
       content_attributes: telegram_params_content_attributes,
       source_id: telegram_params_message_id.to_s
     )
@@ -35,7 +64,42 @@ class Telegram::IncomingMessageService
     @message.save!
   end
 
-  private
+  # -- GroupConversationHandler abstract methods --
+
+  def extract_group_identifier
+    "telegram-#{telegram_params_chat_id}"
+  end
+
+  def extract_group_source_id
+    telegram_params_chat_id.to_s
+  end
+
+  def extract_group_name
+    telegram_params_chat_title
+  end
+
+  def extract_sender_identifier
+    nil
+  end
+
+  def extract_sender_source_id
+    telegram_params_from_id.to_s
+  end
+
+  def extract_sender_name
+    "#{telegram_params_first_name} #{telegram_params_last_name}".strip
+  end
+
+  def extract_sender_phone
+    nil
+  end
+
+  def update_sender_avatar
+    return if @sender_contact.blank? || @sender_contact.avatar.attached?
+
+    avatar_url = inbox.channel.get_telegram_profile_image(telegram_params_from_id)
+    ::Avatar::AvatarFromUrlJob.perform_later(@sender_contact, avatar_url) if avatar_url
+  end
 
   def set_contact
     contact_inbox = ::ContactInboxWithContactBuilder.new(
