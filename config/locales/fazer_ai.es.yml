@@ -34,6 +34,10 @@ es:
       limit_reached: Puede fijar hasta %{limit} conversaciones.
       conversation_resolved: No se puede fijar una conversación resuelta.
       conversation_not_visible: Esta conversación no está en su lista, así que no se puede fijar.
+    meta:
+      send_failed: Algo salió mal al enviar este mensaje y no se pudo confirmar la entrega. Revise la conversación antes de enviarlo de nuevo.
+      messaging_window_closed: La ventana de respuesta de Meta para este contacto se cerró. Se reabre cuando el contacto envíe un mensaje nuevo.
+      messaging_window_closed_for_automation: Meta solo acepta respuestas automáticas hasta 24 horas después del último mensaje del contacto. Toma la conversación para responder como agente.
     whatsapp:
       group_announcement_only: Solo los administradores pueden enviar mensajes en este grupo
       group_description_cannot_be_removed: WhatsApp no permite eliminar la descripción de un grupo una vez definida. Reemplace el texto en lugar de borrarlo.
@@ -58,6 +62,7 @@ es:
           media_too_large: El archivo adjunto es demasiado grande para enviarlo.
           invalid_payload: WhatsApp rechazó el contenido del mensaje.
           still_processing: El mensaje aún se estaba enviando en otro lugar y no se pudo confirmar.
+          send_failed_after_retries: No se pudo enviar el mensaje después de varios intentos. Envíelo de nuevo.
         provider_connection:
           wrong_phone_number: El número de teléfono que intenta vincular no es el mismo que tiene configurado. Verifique que el número sea correcto antes de escanear el código QR.
           reconnect_loop_detected: No se pudo restablecer la conexión después de varios intentos. Los reintentos automáticos continúan a intervalos cada vez mayores. Si el problema persiste, desconecte la bandeja de entrada y vuelva a vincularla escaneando un código QR nuevo.
@@ -101,6 +106,9 @@ es:
         demote:
           single: "%{author_name} degradó a %{contact_name} a miembro"
           multiple: "%{author_name} degradó a %{contact_names} y %{last_contact_name} a miembros"
+      whatsapp_call:
+        voice: "%{contact_name} llamó por WhatsApp"
+        video: "%{contact_name} hizo una videollamada por WhatsApp"
       groups_update:
         subject_changed: '%{author_name} cambió el nombre del grupo a "%{value}"'
         description_changed: "%{author_name} cambió la descripción del grupo"

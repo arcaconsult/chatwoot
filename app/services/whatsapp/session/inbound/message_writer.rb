@@ -88,7 +88,7 @@ class Whatsapp::Session::Inbound::MessageWriter
     # this message carries is the text that edit superseded. Everything around the body
     # is still only here, so the row takes that and keeps what it is showing.
     unless message.is_edited
-      message.content = message_content
+      message.content = recovered_body
       attach_location(message)
     end
     settle(message)
@@ -147,7 +147,24 @@ class Whatsapp::Session::Inbound::MessageWriter
     # re-evaluated the rules against whatever the row says by then, and an edit landing in between
     # would run rules on a body they never matched -- a reply to the contact that no arrival and no
     # recovery asked for.
-    recovered[Whatsapp::Session::Inbound::MessageWriter::RECOVERY_OWED] = Time.current.to_i
+    #
+    # It names the body it owes the announcement for, as a fingerprint taken here and never rebuilt. The
+    # redelivery that pays the debt is a different delivery and must not work it out from its own
+    # payload: `message_content` resolves mentions against the contacts as they are now, so a contact
+    # renamed in between would produce a different string for a message nobody edited, and the debt
+    # would be settled announcing nothing.
+    #
+    # Of what this delivery recovered, not of what the row is about to show. An edit that got here first
+    # keeps its own body above, and fingerprinting that would have the redelivery announce the editor's
+    # text as recovered content -- the arrival's rules answering about a body no recovery ever carried,
+    # which is the whole of #661.
+    #
+    # Two keys off one digest, and the second outlives the first. The debt says an announcement is owed and
+    # comes off the moment one is enqueued; `RECOVERED_BODY` says the body on this row came from a recovery,
+    # which stays true afterwards and is what a later write-back reads to know whether the body it just
+    # restored is that one (#666).
+    recovered[Message::RECOVERED_BODY] = Digest::SHA256.hexdigest(recovered_body.to_s)
+    recovered[RECOVERY_OWED] = { 'at' => Time.current.to_i, 'body' => recovered[Message::RECOVERED_BODY] }
 
     message.content_attributes = message.content_attributes.merge(recovered.compact)
                                         .except('is_unsupported', 'unsupported_reason')
@@ -162,6 +179,21 @@ class Whatsapp::Session::Inbound::MessageWriter
     seen = message.content_attributes['external_author'].to_h.merge(recovered.to_h)
 
     seen.compact.presence
+  end
+
+  # The body this delivery carries, and so the body a recovery of it speaks of (#661). Not the body the
+  # row ends up showing: an edit that reached the row first keeps its own (`reconcile_in_place`), and
+  # whether the two say the same thing is exactly what the reader of that announcement has to be able to
+  # ask. Read again by the redelivery that pays an announcement debt, which is the same message and
+  # therefore carries the same body.
+  # Worked out once and kept: it is the body that gets written, the body the debt is fingerprinted on and
+  # the body the announcement names, and `message_content` resolves mentions against the contacts as they
+  # are now. Three calls are three chances for a rename landing between them to make those three disagree,
+  # which reads downstream as a message somebody edited.
+  def recovered_body
+    return @recovered_body if defined?(@recovered_body)
+
+    @recovered_body = content_type == 'contacts' ? single_card_line : message_content
   end
 
   def perform
@@ -281,9 +313,7 @@ class Whatsapp::Session::Inbound::MessageWriter
   # A rich card carries its header image, video or document in `media`, which is the
   # same downloadable reference a plain media message has: without this the card is
   # stored with its text and no attachment.
-  def enqueue_media_fetch(message)
-    self.class.fetch_media_for(message, inbound)
-  end
+  def enqueue_media_fetch(message) = self.class.fetch_media_for(message, inbound)
 
   # One message per shared contact, each with a native contact attachment, so the
   # dashboard renders them in the contact bubble instead of as plain text.
@@ -343,15 +373,31 @@ class Whatsapp::Session::Inbound::MessageWriter
 
   # Fills a row, new or already stored, with one card. Answers nil for a card that says
   # nothing, which is what keeps an empty one from taking a row.
-  def apply_contact_card(message, card)
+  # The line a share of exactly one readable card is stored as, which is what `reconcile_as_a_share`
+  # writes and therefore what a recovery of that share is about. Nothing for a share of several or of
+  # none: that one stays the unsupported bubble it already was, and recovers nothing.
+  def single_card_line
+    cards = Array(content.contacts).select { |card| Whatsapp::Session::Inbound::ContactCard.readable?(card) }
+    return unless cards.one?
+
+    name, phone = card_identity(cards.first)
+    Whatsapp::Session::Inbound::ContactCard.line(name, phone) if phone.present? || name.present?
+  end
+
+  # `display_name` is what the contract calls it. Reading `name` found nothing, so a
+  # card with a phone lost its name and a name-only card was dropped entirely, leaving
+  # the conversation that had just been opened with no message in it. Both fields are
+  # optional on the wire and a card may arrive as nothing but its vCard, which is why
+  # that is read too rather than dropping the share.
+  def card_identity(card)
     card = card.to_h.stringify_keys
-    # `display_name` is what the contract calls it. Reading `name` found nothing, so a
-    # card with a phone lost its name and a name-only card was dropped entirely, leaving
-    # the conversation that had just been opened with no message in it. Both fields are
-    # optional on the wire and a card may arrive as nothing but its vCard, which is why
-    # that is read too rather than dropping the share.
-    phone = card['phone'].presence || Whatsapp::Session::Inbound::ContactCard.phone_in(card['vcard'])
-    name = card['display_name'].presence || Whatsapp::Session::Inbound::ContactCard.name_in(card['vcard'])
+
+    [card['display_name'].presence || Whatsapp::Session::Inbound::ContactCard.name_in(card['vcard']),
+     card['phone'].presence || Whatsapp::Session::Inbound::ContactCard.phone_in(card['vcard'])]
+  end
+
+  def apply_contact_card(message, card)
+    name, phone = card_identity(card)
     return if phone.blank? && name.blank?
 
     message.content = Whatsapp::Session::Inbound::ContactCard.line(name, phone)

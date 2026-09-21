@@ -6,7 +6,7 @@
 #
 #   def reset_agent_bot_when_assignee_present
 #     return if assignee_id.blank?
-#     self.assignee_agent_bot_id = nil
+#     self.ai_assignee = nil
 #   end
 #
 # Our routing deliberately leaves conversations in the team's queue with NO human assignee (so
@@ -22,6 +22,12 @@
 # this same custom/ tree for why that's the one part of these fixes that isn't a prepend).
 module Custom::ActionService
   def remove_assigned_bot(_params)
-    @conversation.with_lock { @conversation.update!(assignee_agent_bot_id: nil) }
+    # Clear through the polymorphic `ai_assignee` association (upstream #15419), not the raw
+    # `assignee_agent_bot_id` column: since that PR the marker is a pair of columns
+    # (`assignee_agent_bot_id` + `ai_assignee_type`), and Conversation#assignee_type returns
+    # `ai_assignee_type` whenever it is present. Nulling only the id would leave the type
+    # orphaned and the conversation would keep reporting itself as owned by the AI -- exactly
+    # what this action exists to undo. Assigning nil to the association clears both columns.
+    @conversation.with_lock { @conversation.update!(ai_assignee: nil) }
   end
 end

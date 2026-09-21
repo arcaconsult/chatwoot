@@ -94,6 +94,13 @@ class Message < ApplicationRecord
   # the channel's answer instead of going out on the optimistic write. See `#announce_edit`.
   attr_accessor :defer_edit_announcement
 
+  # The digest of the body a recovery brought into this row, written by the WhatsApp session writer in
+  # the same save as that body and never taken off. The announcement debt beside it is a debt and comes
+  # off as soon as the announcement is enqueued; this is a fact about where the body came from, and it
+  # has to outlive the announcement. It is what lets a write-back tell "the body I just restored is the
+  # one a recovery brought" from "the body I just restored is an edit somebody made". #666
+  RECOVERED_BODY = 'recovered_body'.freeze
+
   enum message_type: { incoming: 0, outgoing: 1, activity: 2, template: 3 }
   enum content_type: {
     text: 0,
@@ -352,12 +359,35 @@ class Message < ApplicationRecord
   end
 
   # An edit typed by an agent is written before the channel has taken it (`MessagesController#edit_content`
-  # writes, then asks), and written back when the channel refuses. Neither of those is an edit anybody
-  # made: the contact still has the body they always had. The caller that writes optimistically sets this
-  # and announces itself once the channel has accepted, and the write-back is covered by the same flag,
-  # which would otherwise announce a second time on a rollback that restores an already edited body.
+  # writes, then asks), and written back when the channel refuses. The optimistic write is not an edit
+  # anybody made -- the contact still has the body they always had -- so the caller sets the flag above and
+  # calls this once the channel has accepted.
+  #
+  # The write-back calls it too, and that is deliberate. When it restores a body an earlier edit had put
+  # there, that body is the one the contact has, and the rules for it may never have run: the announcement
+  # that named it found the refused body on the row and stood down (#660). Announcing it again costs
+  # nothing, because the claim is taken on the body and a rule that already ran for it does not run twice.
+  # A write-back that undoes a first edit announces nothing, and `edited_in_place?` is what says so: the
+  # marker comes off in the same write.
   def announce_edit
     send_edited_event if edited_in_place?
+  end
+
+  # What the write-back after a refused edit has to say, which is two things and not one.
+  #
+  # The edit half is `announce_edit` above. The other half is the recovery: the announcement that named
+  # the recovered body found the optimistic edit on the row and stood down (#661), and the refusal has
+  # just put that body back with nobody having asked the arrival rules about it (#666). Only when the
+  # body it restored is the recovered one -- a write-back that undoes a second edit restores the first
+  # edit's body, and announcing that as recovered would have the rules answer about a body no recovery
+  # ever carried, which is the defect #661 closed.
+  #
+  # Announcing again when the recovery was in fact evaluated costs nothing: `AutomationRuleListener`
+  # only proceeds for a tracked placeholder arrival, and the run claim it takes is per message, so a
+  # rule that already ran for this row does not run twice.
+  def announce_restored_body
+    announce_edit
+    send_recovered_event if showing_recovered_body?
   end
 
   private
@@ -502,8 +532,26 @@ class Message < ApplicationRecord
     previous_changes.key?('content') && is_edited
   end
 
+  # The row is showing the body a recovery brought, rather than anything written over it since. Absent on
+  # every row no recovery ever filled in, which is what keeps this quiet for an ordinary message.
+  def showing_recovered_body?
+    digest = content_attributes.to_h[RECOVERED_BODY]
+
+    digest.present? && digest == Digest::SHA256.hexdigest(content.to_s)
+  end
+
+  # Named, like every other announcement that speaks of a body, so the listener can tell whether the row
+  # still shows what this is about by the time the work runs.
+  def send_recovered_event
+    Rails.configuration.dispatcher.dispatch(MESSAGE_RECOVERED, Time.zone.now, message: self, content: content)
+  end
+
+  # `content` is the body this announcement speaks of, and the listener only evaluates the rules while the
+  # row is still showing it: the work runs long after the dispatch, and a second edit committing in
+  # between would otherwise have the rules answer about a body this announcement is not about (#660).
   def send_edited_event
-    Rails.configuration.dispatcher.dispatch(MESSAGE_EDITED, Time.zone.now, message: self, performed_by: Current.executed_by,
+    Rails.configuration.dispatcher.dispatch(MESSAGE_EDITED, Time.zone.now, message: self, content: content,
+                                                                           performed_by: Current.executed_by,
                                                                            previous_changes: previous_changes)
   end
 

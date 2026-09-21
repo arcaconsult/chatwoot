@@ -34,6 +34,10 @@ en:
       limit_reached: You can pin up to %{limit} conversations.
       conversation_resolved: A resolved conversation cannot be pinned.
       conversation_not_visible: This conversation is not in your list, so it cannot be pinned.
+    meta:
+      send_failed: Something went wrong while sending this message and delivery could not be confirmed. Check the conversation before sending it again.
+      messaging_window_closed: Meta's reply window for this contact has closed. It reopens when the contact sends a new message.
+      messaging_window_closed_for_automation: Meta only accepts automated replies within 24 hours of the contact's last message. Take over the conversation to reply as an agent.
     whatsapp:
       group_announcement_only: Only administrators are allowed to send messages in this group
       group_description_cannot_be_removed: WhatsApp does not allow a group description to be removed once it is set. Replace the text instead.
@@ -58,6 +62,7 @@ en:
           media_too_large: The attachment is too large to send.
           invalid_payload: WhatsApp rejected the message content.
           still_processing: The message was still being sent elsewhere and could not be confirmed.
+          send_failed_after_retries: The message could not be sent after several attempts. Send it again.
         provider_connection:
           wrong_phone_number: The phone number you are trying to link is not the same as the one you have configured. Please make sure the phone number is correct before scanning the QR code.
           reconnect_loop_detected: The connection could not be re-established after several attempts. Automatic retries continue at increasing intervals. If this persists, disconnect the inbox and pair it again by scanning a new QR code.
@@ -101,6 +106,9 @@ en:
         demote:
           single: "%{author_name} demoted %{contact_name} to member"
           multiple: "%{author_name} demoted %{contact_names} and %{last_contact_name} to member"
+      whatsapp_call:
+        voice: "%{contact_name} called on WhatsApp"
+        video: "%{contact_name} made a video call on WhatsApp"
       groups_update:
         subject_changed: '%{author_name} changed the group name to "%{value}"'
         description_changed: "%{author_name} changed the group description"
