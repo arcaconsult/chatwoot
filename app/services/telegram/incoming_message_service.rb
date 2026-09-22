@@ -67,7 +67,10 @@ class Telegram::IncomingMessageService # rubocop:disable Metrics/ClassLength
   # -- GroupConversationHandler abstract methods --
 
   def extract_group_identifier
-    "telegram-#{telegram_params_chat_id}"
+    # ARCACONSULT: chat_id de grupo é negativo, então o sinal vira um segundo hífen
+    # ("telegram--5442295473"). O sinal é removido; como todo chat de grupo é negativo,
+    # a remoção é injetiva e não cria colisão entre grupos.
+    "telegram-#{telegram_params_chat_id.to_s.delete('-')}"
   end
 
   def extract_group_source_id
@@ -92,6 +95,23 @@ class Telegram::IncomingMessageService # rubocop:disable Metrics/ClassLength
 
   def extract_sender_phone
     nil
+  end
+
+  # ARCACONSULT: sobrescreve o default do concern, que grava só o nome. Sem isso o contato
+  # visto primeiro num grupo fica sem os metadados do Telegram que o caminho privado grava
+  # -- e continua sem, mesmo que depois mande DM, porque o builder devolve o contact_inbox
+  # existente sem atualizar atributos. phone_number e identifier ficam de fora porque
+  # extract_sender_phone e extract_sender_identifier retornam nil no Telegram.
+  def build_sender_contact_attributes
+    {
+      name: extract_sender_name,
+      additional_attributes: {
+        username: telegram_params_username,
+        language_code: telegram_params_language_code,
+        social_telegram_user_id: telegram_params_from_id,
+        social_telegram_user_name: telegram_params_username
+      }
+    }
   end
 
   def update_sender_avatar
