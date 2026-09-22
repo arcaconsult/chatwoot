@@ -77,6 +77,29 @@ RSpec.describe Channel::Telegram do
     expect(sources.scan('TELEGRAM_REQUEST_OPTIONS').size).to eq(2)
   end
 
+  # ARCACONSULT: conversas de grupo nascem pelo GroupConversationHandler, que não grava
+  # chat_id em additional_attributes. Sem o fallback, responder num grupo manda
+  # `chat_id=` vazio para o Bot API -- o agente escreve e nada chega, sem erro visível.
+  # O terceiro caso (nenhum dos dois presente) não é testado porque não é alcançável:
+  # `contact_inbox` é obrigatório na Conversation e `source_id` é NOT NULL.
+  describe '#chat_id' do
+    it 'reads it from the conversation additional_attributes' do
+      conversation = create(:conversation, inbox: telegram_channel.inbox, additional_attributes: { 'chat_id' => '123' })
+      message = create(:message, conversation: conversation)
+
+      expect(telegram_channel.chat_id(message)).to eq('123')
+    end
+
+    it 'falls back to the contact_inbox source_id when additional_attributes carries none' do
+      contact_inbox = create(:contact_inbox, inbox: telegram_channel.inbox, source_id: '-5442295473')
+      conversation = create(:conversation, inbox: telegram_channel.inbox, contact: contact_inbox.contact,
+                                           contact_inbox: contact_inbox, additional_attributes: {})
+      message = create(:message, conversation: conversation)
+
+      expect(telegram_channel.chat_id(message)).to eq('-5442295473')
+    end
+  end
+
   describe '#convert_markdown_to_telegram_html' do
     subject { telegram_channel.send(:convert_markdown_to_telegram_html, text) }
 

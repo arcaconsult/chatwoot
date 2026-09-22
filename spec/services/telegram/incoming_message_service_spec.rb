@@ -76,21 +76,117 @@ describe Telegram::IncomingMessageService do
       end
     end
 
+    # ARCACONSULT: grupos e supergrupos viram conversas, reaproveitando o
+    # GroupConversationHandler -- o mesmo concern que o WhatsApp/Baileys usa. Até esta
+    # feature o serviço descartava silenciosamente tudo que não fosse chat privado, e o
+    # spec que vivia aqui afirmava justamente esse descarte.
     context 'when group messages' do
-      it 'doesnot create conversations, message and contacts' do
-        params = {
-          'update_id' => 2_342_342_343_242,
+      let(:group_chat_id) { -5_442_295_473 }
+      let(:sender_id) { 987_654_321 }
+      let(:group_contact) { ContactInbox.find_by!(inbox: telegram_channel.inbox, source_id: group_chat_id.to_s).contact }
+      let(:sender_contact) { ContactInbox.find_by!(inbox: telegram_channel.inbox, source_id: sender_id.to_s).contact }
+
+      def group_params(chat_type: 'supergroup', message_id: 100, text: 'Teste de grupo')
+        {
+          'update_id' => 123_456_789,
           'message' => {
-            'message_id' => 1,
+            'message_id' => message_id,
             'from' => {
-              'id' => 23, 'is_bot' => false, 'first_name' => 'Sojan', 'last_name' => 'Jose', 'username' => 'sojan', 'language_code' => 'en'
+              'id' => sender_id, 'is_bot' => false, 'first_name' => 'Leonardo',
+              'last_name' => 'Silva', 'username' => 'leosilva', 'language_code' => 'pt-br'
             },
-            'chat' => { 'id' => 23, 'first_name' => 'Sojan', 'last_name' => 'Jose', 'username' => 'sojan', 'type' => 'group' },
-            'date' => 1_631_132_077, 'text' => 'test'
+            'chat' => { 'id' => group_chat_id, 'title' => 'Alertas Arca', 'type' => chat_type },
+            'date' => 1_695_000_000,
+            'text' => text
           }
         }.with_indifferent_access
-        described_class.new(inbox: telegram_channel.inbox, params: params).perform
-        expect(telegram_channel.inbox.conversations.count).to eq(0)
+      end
+
+      def deliver(**opts)
+        described_class.new(inbox: telegram_channel.inbox, params: group_params(**opts)).perform
+      end
+
+      %w[group supergroup].each do |chat_type|
+        it "creates a group conversation for a #{chat_type}" do
+          deliver(chat_type: chat_type)
+
+          conversation = telegram_channel.inbox.conversations.sole
+          expect(conversation).to be_group_type_group
+          expect(conversation.contact).to eq(group_contact)
+        end
+      end
+
+      it 'names the group contact after the chat title and marks it as a group' do
+        deliver
+
+        expect(group_contact.name).to eq('Alertas Arca')
+        expect(group_contact).to be_group_type_group
+      end
+
+      # O chat_id de um grupo é negativo, então interpolá-lo direto produzia
+      # "telegram--5442295473". O sinal é removido.
+      it 'builds the group identifier without a double hyphen' do
+        deliver
+
+        expect(group_contact.identifier).to eq('telegram-5442295473')
+      end
+
+      # O default do concern grava só o nome; sem o override o contato visto primeiro num
+      # grupo ficaria sem os metadados que o caminho privado grava.
+      it 'creates the sender as its own contact, carrying the telegram metadata' do
+        deliver
+
+        expect(sender_contact).not_to eq(group_contact)
+        expect(sender_contact.name).to eq('Leonardo Silva')
+        expect(sender_contact.additional_attributes).to include(
+          'username' => 'leosilva',
+          'language_code' => 'pt-br',
+          'social_telegram_user_id' => sender_id,
+          'social_telegram_user_name' => 'leosilva'
+        )
+      end
+
+      it 'adds the sender to the group as an active member' do
+        deliver
+
+        member = GroupMember.find_by!(group_contact: group_contact, contact: sender_contact)
+        expect(member.is_active).to be(true)
+        expect(member.role).to eq('member')
+      end
+
+      # Quem assina a mensagem é o remetente, não o grupo: é o que separa "fulano disse" de
+      # uma thread sem autor.
+      it 'saves the message against the sender rather than the group' do
+        deliver
+
+        message = telegram_channel.inbox.messages.sole
+        expect(message.content).to eq('Teste de grupo')
+        expect(message.sender).to eq(sender_contact)
+        expect(message.source_id).to eq('100')
+        expect(message.message_type).to eq('incoming')
+      end
+
+      it 'keeps a second message in the same conversation' do
+        deliver(message_id: 100)
+        conversation = telegram_channel.inbox.conversations.sole
+
+        deliver(message_id: 101, text: 'segunda')
+
+        expect(telegram_channel.inbox.conversations.sole).to eq(conversation)
+        expect(telegram_channel.inbox.messages.count).to eq(2)
+      end
+
+      # O grupo é uma thread única e perpétua: resolver não pode fazer a próxima mensagem
+      # abrir uma conversa nova ao lado da antiga.
+      it 'reuses and reopens the conversation after it was resolved' do
+        deliver(message_id: 100)
+        conversation = telegram_channel.inbox.conversations.sole
+        conversation.resolved!
+
+        deliver(message_id: 101, text: 'depois de resolver')
+
+        expect(telegram_channel.inbox.conversations.sole).to eq(conversation)
+        expect(conversation.reload).to be_open
       end
     end
 
