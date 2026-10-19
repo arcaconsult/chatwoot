@@ -54,12 +54,12 @@ const copyGitSha = () => {
       <!-- eslint-disable vue/no-bare-strings-in-template @intlify/vue-i18n/no-raw-text -->
       <a
         v-if="globalConfig.displayManifest"
-        href="https://fazer.ai"
+        href="https://laura.app.br"
         target="_blank"
         rel="noopener noreferrer"
         class="px-2 text-n-slate-11 hover:text-n-brand"
       >
-        fazer.ai
+        L.A.U.R.A
       </a>
       <!-- eslint-enable vue/no-bare-strings-in-template @intlify/vue-i18n/no-raw-text -->
     </div>
