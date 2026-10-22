@@ -1365,6 +1365,27 @@ describe Whatsapp::Providers::WhatsappBaileysService do
     let(:request_path) { "#{whatsapp_channel.provider_config['provider_url']}/connections/#{whatsapp_channel.phone_number}/on-whatsapp" }
     let(:phone_number) { '+123456789' }
 
+    # A hint for the compose warning: a wedged socket must not hold the web thread for 90 s.
+    # A hint gives up first, a lookup inside a web request gives up before the request is cut, and
+    # the background recheck waits as long as the provider may take.
+    it 'waits as long as the caller can afford' do
+      stub_request(:post, request_path).to_return(status: 200, headers: { 'Content-Type' => 'application/json' },
+                                                  body: { data: [] }.to_json)
+      timeouts = []
+      allow(HTTParty).to receive(:post).and_wrap_original do |original, url, **options|
+        timeouts << options[:timeout]
+        original.call(url, **options)
+      end
+
+      service.on_whatsapp(phone_number, deadline: :hint)
+      service.on_whatsapp(phone_number, deadline: :request)
+      service.on_whatsapp(phone_number)
+
+      # In call order, so an installation whose rack-timeout puts the in-request ceiling at the
+      # full one still reads each call as its own.
+      expect(timeouts).to eq([10, Whatsapp::BaileysRequestOptions::BAILEYS_IN_REQUEST_OPTIONS[:timeout], 90])
+    end
+
     context 'when response is successful' do
       it 'requests whatsapp check' do
         stub_request(:post, request_path)
@@ -1435,8 +1456,9 @@ describe Whatsapp::Providers::WhatsappBaileysService do
             headers: {}
           )
 
-        stub_request(:post, "#{whatsapp_channel.provider_config['provider_url']}/connections/#{whatsapp_channel.phone_number}")
-          .to_return(status: 200)
+        reconnect = stub_request(:post, "#{whatsapp_channel.provider_config['provider_url']}/connections/#{whatsapp_channel.phone_number}")
+                    .to_return(status: 200)
+        whatsapp_channel.update_provider_connection!(connection: 'open')
 
         allow(Rails.logger).to receive(:error)
 
@@ -1445,6 +1467,9 @@ describe Whatsapp::Providers::WhatsappBaileysService do
         end.to raise_error(Whatsapp::Providers::WhatsappBaileysService::ProviderUnavailableError)
 
         expect(Rails.logger).to have_received(:error).with('error message')
+        # A failed number lookup is "unknown", not a dropped session (fazer-ai/chatwoot#877).
+        expect(whatsapp_channel.reload.provider_connection['connection']).to eq('open')
+        expect(reconnect).not_to have_been_requested
       end
     end
   end

@@ -22,6 +22,68 @@ describe Messages::MessageBuilder do
     end
   end
 
+  # message_type is an enum on Message, so `message_type: :incoming` is the shape the rest of the
+  # codebase writes. The builder decides who the sender is, whether the inbox may take incoming
+  # messages and whether to render the e-mail body by comparing against Strings, so a Symbol has to
+  # land on the same decisions as its String.
+  describe 'when message_type arrives as a Symbol' do
+    let(:contact) { create(:contact, account: account, name: 'John', email: 'john@example.com') }
+    let(:conversation) { create(:conversation, inbox: inbox, account: account, contact: contact) }
+
+    it 'refuses an incoming message outside an API inbox, like the String does' do
+      expect { described_class.new(user, conversation, { content: 'test', message_type: :incoming }).perform }
+        .to raise_error 'Incoming messages are only allowed in Api inboxes'
+      expect(conversation.messages.where(content: 'test')).to be_empty
+    end
+
+    it 'saves an outgoing message with the user as sender, like the String does' do
+      message = described_class.new(user, conversation, { content: 'test', message_type: :outgoing }).perform
+
+      expect(message).to be_outgoing
+      expect(message.sender).to eq(user)
+    end
+
+    it 'renders the e-mail body of an outgoing message, like the String does' do
+      email_conversation = create(:conversation, inbox: create(:channel_email, account: account).inbox, account: account, contact: contact)
+
+      message = described_class.new(user, email_conversation, { content: 'Hello {{contact.name}}', message_type: :outgoing }).perform
+
+      expect(message.content_attributes.dig('email', 'text_content', 'full')).to eq 'Hello John'
+    end
+  end
+
+  # A template is sent from the agent side, like an outgoing message: the builder already renders its
+  # e-mail body for that reason, and the sender has to agree, or the conversation shows it as written by
+  # the contact and the mailer, which reads the sender's name, fails to send it.
+  describe 'when message_type is template' do
+    let(:user) { create(:user, account: account, name: 'Agent Smith') }
+    let(:contact) { create(:contact, account: account, name: 'John', email: 'john@example.com') }
+    let(:conversation) do
+      create(:conversation, inbox: create(:channel_email, account: account).inbox, account: account, contact: contact)
+    end
+
+    it 'saves the user as sender, like an outgoing message' do
+      message = described_class.new(user, conversation, { content: 'test', message_type: 'template' }).perform
+
+      expect(message).to be_template
+      expect(message.sender).to eq(user)
+    end
+
+    it 'renders the agent in the e-mail body as the user, not the contact' do
+      message = described_class.new(user, conversation, { content: 'Hi, {{agent.name}} here', message_type: 'template' }).perform
+
+      expect(message.content_attributes.dig('email', 'text_content', 'full')).to eq 'Hi, Agent Smith here'
+    end
+
+    it 'keeps the contact as sender of an incoming message' do
+      api_conversation = create(:conversation, inbox: create(:channel_api, account: account).inbox, account: account, contact: contact)
+
+      message = described_class.new(user, api_conversation, { content: 'test', message_type: 'incoming' }).perform
+
+      expect(message.sender).to eq(contact)
+    end
+  end
+
   describe '#content_attributes' do
     context 'when content_attributes is a JSON string' do
       let(:params) do
@@ -604,6 +666,17 @@ describe Messages::MessageBuilder do
       end
     end
 
+    context 'when forwarding a message in a non email inbox' do
+      let(:params) do
+        ActionController::Parameters.new({ content: 'test', to_emails: 'vendor@example.com',
+                                           content_attributes: { forwarded_message_id: message_for_reply.id }.to_json })
+      end
+
+      it 'rejects the message' do
+        expect { message_builder }.to raise_error 'Forwarded emails need an email inbox'
+      end
+    end
+
     context 'when email channel messages' do
       let!(:channel_email) { create(:channel_email, account: account) }
       let(:inbox_member) { create(:inbox_member, inbox: channel_email.inbox) }
@@ -633,6 +706,94 @@ describe Messages::MessageBuilder do
 
         expect(message.content_attributes[:cc_emails]).to eq ['test1@test.com', 'test2@test.com', 'test3@test.com']
         expect(message.content_attributes[:bcc_emails]).to eq ['test1@test.com', 'test2@test.com', 'test3@test.com']
+      end
+
+      it 'saves the subject on the message' do
+        params = ActionController::Parameters.new({ content: 'test', subject: 'Refund approved' })
+
+        message = described_class.new(user, conversation, params).perform
+
+        expect(message.content_attributes.dig(:email, :subject)).to eq 'Refund approved'
+        expect(message.content_attributes.dig(:email, :html_content, :full)).to be_present
+      end
+
+      it 'does not save a blank subject' do
+        params = ActionController::Parameters.new({ content: 'test', subject: ' ' })
+
+        message = described_class.new(user, conversation, params).perform
+
+        expect(message.content_attributes[:email]).not_to have_key(:subject)
+      end
+
+      it 'does not save the subject on a private note' do
+        params = ActionController::Parameters.new({ content: 'test', subject: 'Refund approved', private: true })
+
+        message = described_class.new(user, conversation, params).perform
+
+        expect(message.content_attributes[:email]).to be_nil
+      end
+
+      context 'when forwarding a message' do
+        let(:forwarded_message) { create(:message, conversation: conversation, account: account, message_type: :incoming) }
+        let(:forwarded_attachment) do
+          attachment = forwarded_message.attachments.new(account_id: account.id, file_type: :image)
+          attachment.file.attach(io: Rails.root.join('spec/assets/avatar.png').open, filename: 'avatar.png', content_type: 'image/png')
+          attachment.save!
+          attachment
+        end
+        let(:params) do
+          ActionController::Parameters.new({
+                                             content: 'Forwarding this',
+                                             private: 'false',
+                                             to_emails: 'vendor@example.com',
+                                             email_html_content: '<p>Forwarding this</p><p>Edited body</p>',
+                                             content_attributes: { forwarded_message_id: forwarded_message.id }.to_json,
+                                             forwarded_attachment_ids: [forwarded_attachment.id]
+                                           })
+        end
+
+        it 'copies the selected attachments of the forwarded message' do
+          message = message_builder
+
+          expect(message.content_attributes[:forwarded_message_id]).to eq forwarded_message.id
+          expect(message.content_attributes[:to_emails]).to eq ['vendor@example.com']
+          expect(message.attachments.map { |attachment| attachment.file.blob }).to eq [forwarded_attachment.file.blob]
+        end
+
+        it 'keeps the edited html when the private flag arrives as a multipart string' do
+          message = message_builder
+
+          expect(message.private).to be(false)
+          expect(message.content_attributes.dig(:email, :html_content, :reply)).to eq('<p>Forwarding this</p><p>Edited body</p>')
+        end
+
+        it 'rejects a private forward' do
+          params[:private] = true
+
+          expect { message_builder }.to raise_error 'Forwarded emails cannot be private'
+        end
+
+        it 'ignores attachments that do not belong to the forwarded message' do
+          other_message = create(:message, conversation: conversation, account: account)
+          other_attachment = other_message.attachments.new(account_id: account.id, file_type: :image)
+          other_attachment.file.attach(io: Rails.root.join('spec/assets/avatar.png').open, filename: 'avatar.png', content_type: 'image/png')
+          other_attachment.save!
+          params[:forwarded_attachment_ids] = [other_attachment.id]
+
+          expect(message_builder.attachments).to be_empty
+        end
+
+        it 'raises when the forwarded message belongs to another conversation' do
+          params[:content_attributes] = { forwarded_message_id: create(:message, account: account).id }.to_json
+
+          expect { message_builder }.to raise_error(ActiveRecord::RecordNotFound)
+        end
+
+        it 'raises when no recipient is given' do
+          params[:to_emails] = ''
+
+          expect { message_builder }.to raise_error(StandardError, 'Forwarded emails need a recipient')
+        end
       end
 
       context 'when custom email content is provided' do

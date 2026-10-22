@@ -1,10 +1,14 @@
-# A fire-and-forget command could not be executed. The only one with something to show
-# for it is a send: its message is marked failed so the agent sees it did not go out.
+# A fire-and-forget command could not be executed. A send has something to show for it:
+# its message is marked failed so the agent sees it did not go out. A teardown the
+# connector never attempted is sent again (see Whatsapp::Session::TeardownRetry).
 class Whatsapp::Session::Inbound::Handlers::CommandFailed < Whatsapp::Session::Inbound::Handlers::Base
   def perform
     Rails.logger.warn(
       "[WHATSAPP SESSION] command #{payload.command_type} failed on inbox #{inbox.id}: #{payload.error&.code}"
     )
+    return teardown_failed if Whatsapp::Session::TeardownRetry.teardown?(payload)
+    return call_command_failed if payload.command_type.to_s.start_with?('call.')
+
     message = pending_message
     return :ignored if message.nil?
 
@@ -12,6 +16,18 @@ class Whatsapp::Session::Inbound::Handlers::CommandFailed < Whatsapp::Session::I
   end
 
   private
+
+  # A call command answers nothing, so its failure is the only word of it. What a failed one
+  # means for the call is the calling flow's to settle, in the enterprise half.
+  def call_command_failed = :ignored
+
+  # The connector is the only provider that answers a teardown this way, and the only one
+  # the retry knows how to reach.
+  def teardown_failed
+    return :ignored unless channel.provider == 'native'
+
+    Whatsapp::Session::TeardownRetry.consider(event) ? :handled : :ignored
+  end
 
   # The send reserved its WhatsApp id before dispatching, so the failed command points
   # at a message that may not carry that id as source_id yet.
@@ -23,3 +39,5 @@ class Whatsapp::Session::Inbound::Handlers::CommandFailed < Whatsapp::Session::I
     ).first
   end
 end
+
+Whatsapp::Session::Inbound::Handlers::CommandFailed.prepend_mod_with('Whatsapp::Session::Inbound::Handlers::CommandFailed')

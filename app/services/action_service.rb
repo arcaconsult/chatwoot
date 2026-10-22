@@ -19,7 +19,7 @@ class ActionService
   end
 
   def open_conversation(_params)
-    @conversation.open!
+    open_for_people
   end
 
   def pending_conversation(_params)
@@ -27,6 +27,8 @@ class ActionService
   end
 
   def change_status(status)
+    return open_for_people if status[0].to_s == 'open'
+
     @conversation.update!(status: status[0])
   end
 
@@ -59,6 +61,17 @@ class ActionService
 
     labels = @conversation.label_list - labels
     @conversation.update!(label_list: labels)
+  end
+
+  # Clears conversation custom attributes by key. Writing an empty value instead would leave the key
+  # in the JSON, and on a list attribute that reads as unset on screen while hiding the delete
+  # control, so an agent could no longer clear it by hand.
+  def remove_custom_attribute(attribute_keys = [])
+    keys = Array(attribute_keys).map(&:to_s)
+    remaining = @conversation.custom_attributes.except(*keys)
+    return if remaining.size == @conversation.custom_attributes.size
+
+    @conversation.update!(custom_attributes: remaining)
   end
 
   def assign_team(team_ids = [])
@@ -120,6 +133,16 @@ class ActionService
   end
 
   private
+
+  # Opening is handing the conversation to people, so the AI assignee goes with it, the same as a
+  # reopen from the dashboard (ConversationsController#handle_human_open) and a bot handoff
+  # (Conversation#bot_handoff!). Left in place, it keeps an open conversation out of Unassigned and
+  # out of auto-assignment, which is how a routing rule ends up hiding what it routes (issue #708).
+  # One save on purpose: auto-assignment runs inside it and skips a conversation that still names a
+  # bot, so releasing afterwards would open the conversation without ever assigning it.
+  def open_for_people
+    @conversation.update!(status: :open, ai_assignee: nil)
+  end
 
   def last_responding_agent_id
     @conversation.messages.outgoing.where(sender_type: 'User', private: false).last&.sender_id

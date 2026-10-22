@@ -57,6 +57,7 @@ module Redis::RedisKeys
   ## User Keys
   # SSO Auth Tokens
   USER_SSO_AUTH_TOKEN = 'USER_SSO_AUTH_TOKEN::%<user_id>d::%<token>s'.freeze
+  USER_SSO_IMPERSONATOR = 'USER_SSO_IMPERSONATOR::%<user_id>d::%<token>s'.freeze
 
   ## Online Status Keys
   # hash containing user_id key and status as value
@@ -80,9 +81,21 @@ module Redis::RedisKeys
   OPENAI_CONVERSATION_KEY = 'OPEN_AI_CONVERSATION_KEY::V1::%<event_name>s::%<conversation_id>d::%<updated_at>d'.freeze
   # Bridges a WhatsApp call `terminate` that overtook its `connect` so the later connect can finalize it.
   WHATSAPP_CALL_TERMINATE_TOMBSTONE = 'WHATSAPP_CALL_TERMINATE_TOMBSTONE::%<call_id>s'.freeze
+  # The connector's call commands that answer nothing, by command id, until a failure could still come back for them.
+  WHATSAPP_CONNECTOR_CALL_COMMAND = 'WHATSAPP_CONNECTOR_CALL_COMMAND::%<command_id>s'.freeze
+  # A native inbox whose calling was turned on or off while its pairing was still under way.
+  WHATSAPP_CONNECTOR_CALL_POLICY_PENDING = 'WHATSAPP_CONNECTOR_CALL_POLICY_PENDING::%<channel_id>s'.freeze
+  # A connector call event that arrived before the Call it is about was recorded.
+  WHATSAPP_CONNECTOR_CALL_PENDING = 'WHATSAPP_CONNECTOR_CALL_PENDING::%<inbox_id>s::%<call_id>s::%<kind>s'.freeze
+  # A native channel dialling this phone through Chatwoot, while its call.start is out. One
+  # key per dialler, so two dialling the same number at once do not erase each other.
+  WHATSAPP_CONNECTOR_CALL_DIALING = 'WHATSAPP_CONNECTOR_CALL_DIALING::%<phone>s::%<channel_id>s'.freeze
   # The provider message ids this app has just acknowledged to WhatsApp, per conversation, so the
   # provider's echo of that receipt is not read back as a device of this account opening the chat.
   WHATSAPP_SELF_READ_RECEIPT = 'WHATSAPP_SELF_READ_RECEIPT::%<conversation_id>s::%<source_id>s'.freeze
+  # When the newest message a delivery or read receipt answered was sent, per contact and
+  # inbox, for a number lookup that was still waiting on the provider when it arrived.
+  WHATSAPP_RECEIPT_SEEN = 'WHATSAPP_RECEIPT_SEEN::%<inbox_id>d::%<contact_id>d'.freeze
   # An automation rule that has already acted on one message, so the content arriving after the
   # placeholder it was stored as does not run that rule a second time.
   AUTOMATION_RULE_MESSAGE_RUN = 'AUTOMATION_RULE_MESSAGE_RUN::%<rule_id>d::%<message_id>d'.freeze
@@ -108,9 +121,8 @@ module Redis::RedisKeys
   CAPTAIN_CONVERSATION_FAQ_MUTEX = 'CAPTAIN_CONVERSATION_FAQ_LOCK::%<assistant_id>s::%<language>s'.freeze
 
   ## Auto Assignment Keys
-  # Track conversation assignments to agents for rate limiting
-  ASSIGNMENT_KEY = 'ASSIGNMENT::%<inbox_id>d::AGENT::%<agent_id>d::CONVERSATION::%<conversation_id>d'.freeze
-  ASSIGNMENT_KEY_PATTERN = 'ASSIGNMENT::%<inbox_id>d::AGENT::%<agent_id>d::*'.freeze
+  # Sorted set of conversation ids assigned to an agent, scored by assignment time, for rate limiting
+  ASSIGNMENT_KEY = 'ASSIGNMENT::%<inbox_id>d::AGENT::%<agent_id>d'.freeze
   # At-most-one AssignmentJob per inbox in-flight (queued or running); further enqueues are skipped
   AUTO_ASSIGNMENT_IN_FLIGHT_KEY = 'AUTO_ASSIGNMENT_IN_FLIGHT::%<inbox_id>d'.freeze
 
@@ -120,4 +132,24 @@ module Redis::RedisKeys
 
   ## Account Email Rate Limiting
   ACCOUNT_OUTBOUND_EMAIL_COUNT_KEY = 'OUTBOUND_EMAIL_COUNT::%<account_id>d::%<date>s'.freeze
+
+  ## Device verification (cloud sign-in challenge)
+  # HMAC digest of the emailed code, consumed atomically on redemption
+  DEVICE_VERIFICATION_CODE = 'DEVICE_VERIFICATION::CODE::%<user_id>d::%<jti>s'.freeze
+  # Wrong-code counter per challenge
+  DEVICE_VERIFICATION_ATTEMPTS = 'DEVICE_VERIFICATION::ATTEMPTS::%<user_id>d::%<jti>s'.freeze
+  # Rolling per-user challenge issuance budget
+  DEVICE_VERIFICATION_ISSUANCE = 'DEVICE_VERIFICATION::ISSUANCE::%<user_id>d'.freeze
+
+  ## Captain email verification (one-time code typed by the customer in a conversation)
+  # Email address the active code was sent to, with the HMAC digest of the code, consumed atomically on verification
+  CAPTAIN_EMAIL_VERIFICATION_CODE = 'CAPTAIN::EMAIL_VERIFICATION::CODE::%<conversation_id>d'.freeze
+  # Wrong-code counter for the active code
+  CAPTAIN_EMAIL_VERIFICATION_ATTEMPTS = 'CAPTAIN::EMAIL_VERIFICATION::ATTEMPTS::%<conversation_id>d'.freeze
+  # Hourly budget of codes sent from one contact inbox, counted from the first send
+  CAPTAIN_EMAIL_VERIFICATION_SENDS = 'CAPTAIN::EMAIL_VERIFICATION::SENDS::%<contact_inbox_id>d'.freeze
+  # Hourly budget of codes sent to one email address across contact inboxes, counted from the first send
+  CAPTAIN_EMAIL_VERIFICATION_EMAIL_SENDS = 'CAPTAIN::EMAIL_VERIFICATION::EMAIL_SENDS::%<email_digest>s'.freeze
+  # Email address verified in the conversation
+  CAPTAIN_EMAIL_VERIFICATION_VERIFIED = 'CAPTAIN::EMAIL_VERIFICATION::VERIFIED::%<conversation_id>d'.freeze
 end

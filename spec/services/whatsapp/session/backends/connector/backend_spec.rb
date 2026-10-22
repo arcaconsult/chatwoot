@@ -26,7 +26,8 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
       'group.info' => { 'group' => { 'kind' => 'group', 'id' => '120363040000000001' }, 'subject' => 'Equipe' },
       'group.invite.get' => { 'code' => 'FAKEINVITE0001' },
       'group.participants.update' => [{ 'address' => { 'kind' => 'phone', 'id' => '5541999990000' }, 'status' => 'success' }],
-      'group.join_requests.list' => []
+      'group.join_requests.list' => [],
+      'call.start' => { 'call_id' => 'CALLOUT1' }
     }
   end
 
@@ -110,6 +111,44 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
     expect(described_class.capabilities).to eq(Whatsapp::Session::Registry.descriptor('native').capabilities)
   end
 
+  # A number check runs inside a request (opening a conversation, the inbox's number
+  # lookup), and the caller already treats a failed check as "keep the typed number". Left
+  # on the RPC default it waited 20 s for a session that does not answer, longer than the
+  # request itself may run, so the request died with a 500 before the fallback could run.
+  it 'gives a number check a ceiling well inside a request' do
+    backend.check_numbers(model::Commands::ContactCheck.new(phones: ['5541999990000']))
+
+    expect(client).to have_received(:call)
+      .with(an_instance_of(model::Commands::ContactCheck), timeout: be <= 5)
+  end
+
+  # A dial asks inside its own budget and hands over what the check may have of it.
+  it 'gives a number check the time its caller names' do
+    backend.check_numbers(model::Commands::ContactCheck.new(phones: ['5541999990000']), timeout: 3)
+
+    expect(client).to have_received(:call).with(an_instance_of(model::Commands::ContactCheck), timeout: 3)
+  end
+
+  # The connector answers `history.request` with `null` once the phone was asked, and
+  # refuses one with no anchor; the answer itself comes back as `history.sync`.
+  it 'carries a history request to the session and waits for the connector to take it' do
+    request = model::Commands::HistoryRequest.new(
+      chat: model::Address.phone('5541999990000'), count: 50,
+      before: model::Commands::HistoryAnchor.new(id: '3EB0OLDEST', timestamp: 1_755_430_000_000, from_me: false)
+    )
+
+    expect(backend.request_history(request)).to be_nil
+    expect(client).to have_received(:call).with(request)
+    expect(request.to_h).to include('chat' => { 'kind' => 'phone', 'id' => '5541999990000' },
+                                    'before' => { 'id' => '3EB0OLDEST', 'timestamp' => 1_755_430_000_000, 'from_me' => false })
+  end
+
+  it 'asks for history on every connect and pages only from a message' do
+    expect(described_class.history_on_every_connect?).to be(true)
+    expect(described_class.history_needs_anchor?).to be(true)
+    expect(Whatsapp::Session::Backend.history_on_every_connect?).to be(false)
+  end
+
   it 'refuses to work without the session id the inbox should have generated' do
     channel.update_columns(provider_config: {}) # rubocop:disable Rails/SkipsModelValidations
 
@@ -152,8 +191,9 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
 
   # The connector answers a teardown it could not carry out with `command.failed`, and
   # that event is routed to an inbox by `session_id`: this inbox is being destroyed, so
-  # the lookup misses and the event is dropped as an orphan. What is written here is the
-  # last thing about the session anybody can see.
+  # the lookup misses. Short of a teardown the connector never attempted, which is sent
+  # again, the event is dropped as an orphan, and what is written here is the last thing
+  # about the session anybody can see.
   it 'writes down what it asked for, because the failure has nowhere to be reported' do
     allow(Rails.logger).to receive(:info)
 
@@ -162,6 +202,66 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
     # The command ids too: they are what ties this line to the connector's own log, which
     # is the only other place a teardown that failed leaves a trace.
     expect(Rails.logger).to have_received(:info).with(/tearing session #{session_id} down.*cmd-0001.*cmd-0002/)
+  end
+
+  # What lets a retry of a teardown the connector never attempted tell a disconnect that
+  # still stands from a session the operator has paired again since.
+  describe 'the note a retried teardown checks' do
+    after { Whatsapp::Session::TeardownRetry.withdrawn(session_id) }
+
+    it 'is left by the teardown' do
+      backend.delete_session
+
+      expect(Whatsapp::Session::TeardownRetry.wanted?(session_id)).to be(true)
+    end
+
+    # The disconnect endpoint answers ProviderUnavailable with a 503 and anything else with
+    # a 500, and the client already translates its own Redis failures the same way.
+    it 'reports a Redis that is down as the provider being unavailable' do
+      allow(Redis::Alfred).to receive(:setex).and_raise(Redis::CannotConnectError)
+
+      expect { backend.delete_session }.to raise_error(Whatsapp::Session::Errors::ProviderUnavailable)
+    end
+
+    it 'outlasts a teardown left pending while the connector is away' do
+      backend.delete_session
+
+      expect(Redis::Alfred.ttl(Whatsapp::Session::TeardownRetry.requested_key(session_id)))
+        .to be > Whatsapp::Session::TeardownRetry::ATTEMPTS_TTL.to_i
+    end
+
+    it 'is withdrawn by asking to connect' do
+      backend.delete_session
+      backend.connect(model::Commands::SessionConnect.new(pairing: 'qr'))
+
+      expect(Whatsapp::Session::TeardownRetry.wanted?(session_id)).to be(false)
+    end
+  end
+
+  # A logout is the operator's Disconnect too since it stopped deleting the session
+  # (fazer-ai/chatwoot#852), so it has to reach the same places the teardown did.
+  describe 'a logout' do
+    after { Whatsapp::Session::TeardownRetry.withdrawn(session_id) }
+
+    # A connector reads a session's own stream only while it runs the session, so a logout
+    # for one nobody owns -- handed back, or waiting out a resume backoff -- would sit there
+    # undelivered. The wake has some instance adopt it, and with `disconnected` stop there.
+    it 'has the session adopted, without connecting it, before it asks for the logout' do
+      backend.logout
+
+      expect(client).to have_received(:control)
+        .with(have_attributes(class: model::Commands::SessionWake, desired: 'disconnected')).ordered
+      expect(client).to have_received(:publish)
+        .with(an_instance_of(model::Commands::SessionLogout), max_runtime: described_class::TEARDOWN_RUNTIME).ordered
+    end
+
+    # One the connector never attempted is sent again only while somebody still wants it,
+    # and an inbox that is still here wants it only if this note says so.
+    it 'leaves the note a retry of it checks' do
+      backend.logout
+
+      expect(Whatsapp::Session::TeardownRetry.wanted?(session_id)).to be(true)
+    end
   end
 
   # Not `call`. This runs inside the transaction that destroys the inbox, and the connector
@@ -191,6 +291,76 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
     )
 
     expect(result.message_id).to eq('3EB0AAAA')
+  end
+
+  # The connector records a group creation before asking WhatsApp, and a retry under the same key collects the
+  # group the first attempt made. Retried under a fresh key it makes a second group.
+  describe 'a group creation' do
+    let(:command) do
+      model::Commands::GroupCreate.new(subject: 'Equipe', participants: [model::Address.phone('5541999990000')])
+    end
+    let(:keys) { [] }
+    let(:answers) { [] }
+
+    before do
+      allow(Kernel).to receive(:sleep)
+      allow(client).to receive(:call).with(an_instance_of(model::Commands::GroupCreate), any_args) do |_, **options|
+        keys << options[:idempotency_key]
+        answer = answers.shift || results['group.create']
+        raise answer if answer.is_a?(Exception)
+
+        answer
+      end
+    end
+
+    def not_settled = Whatsapp::Session::Errors.build('not_settled', 'group.create: not settled yet')
+
+    it 'goes out once, under an idempotency key' do
+      info = backend.create_group(command)
+
+      expect(info.group.id).to eq('120363040000000001')
+      expect(keys.size).to eq(1)
+      expect(keys.first).to be_present
+    end
+
+    it 'asks again under the same key while the outcome is not settled, and hands back the group it made' do
+      answers.push(not_settled, not_settled)
+
+      info = backend.create_group(command)
+
+      expect(info.group.id).to eq('120363040000000001')
+      expect(keys.size).to eq(3)
+      expect(keys.uniq.size).to eq(1)
+      expect(Kernel).to have_received(:sleep).twice
+    end
+
+    it 'stops after a bounded number of attempts and says the intent is stranded' do
+      answers.concat(Array.new(50) { not_settled })
+      allow(Rails.logger).to receive(:error)
+
+      expect { backend.create_group(command) }
+        .to raise_error(Whatsapp::Session::Errors::Error) { |error|
+          expect(error.code).to eq('not_settled')
+          expect(error).not_to be_retryable
+        }
+      expect(keys.size).to be_between(2, 10)
+      expect(keys.uniq.size).to eq(1)
+      expect(Rails.logger).to have_received(:error).with(/stranded/)
+    end
+
+    it 'does not ask again after any other failure' do
+      answers.push(Whatsapp::Session::Errors.build('not_connected'))
+
+      expect { backend.create_group(command) }.to raise_error(Whatsapp::Session::Errors::NotConnected)
+      expect(keys.size).to eq(1)
+    end
+
+    it 'gives each creation a key of its own' do
+      backend.create_group(command)
+      backend.create_group(command)
+
+      expect(keys.uniq.size).to eq(2)
+    end
   end
 
   # The connector has to fetch the file from this app's storage, encrypt it and upload it
@@ -382,5 +552,41 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
     # And never the other one, which is the whole reason both fields exist.
     expect(client).not_to have_received(:publish).with(anything, hash_including(:timeout))
     expect(client).not_to have_received(:control).with(anything, hash_including(:timeout))
+  end
+
+  describe 'calls' do
+    let(:caller_address) { model::Address.phone('5541999990000') }
+
+    # An answer or a refusal that lands after the call stopped ringing does nothing useful,
+    # so both carry the deadline a momentary command does; a hang-up is right whenever it
+    # lands, so it is bounded only once it runs.
+    it 'publishes the answer, the refusal and the hang-up with the ceiling each deserves' do
+      backend.accept_call(model::Commands::CallAccept.new(call_id: 'CALLX3', sdp: 'SDP-ANSWER-BROWSER'))
+      backend.reject_call(model::Commands::CallReject.new(call_id: 'CALLX4', from: caller_address))
+      backend.terminate_call(model::Commands::CallTerminate.new(call_id: 'CALLX6'))
+
+      expect(client).to have_received(:publish)
+        .with(have_attributes(call_id: 'CALLX3', sdp: 'SDP-ANSWER-BROWSER'), timeout: described_class::MOMENTARY_TIMEOUT)
+      expect(client).to have_received(:publish)
+        .with(have_attributes(call_id: 'CALLX4', from: caller_address), timeout: described_class::MOMENTARY_TIMEOUT)
+      expect(client).to have_received(:publish)
+        .with(an_instance_of(model::Commands::CallTerminate), max_runtime: described_class::CALL_HANGUP_RUNTIME)
+    end
+
+    it 'places a call under the key it was given and answers the call id the connector chose' do
+      command = model::Commands::CallStart.new(to: caller_address, sdp: 'SDP-OFFER')
+
+      expect(backend.start_call(command, idempotency_key: 'call:abc')).to eq('CALLOUT1')
+      expect(client).to have_received(:call).with(command, idempotency_key: 'call:abc', timeout: Whatsapp::Connector::Client::RPC_TIMEOUT)
+    end
+
+    # A call id is what every later event is matched by, so a result without one is a
+    # connector bug to surface, not an id to make up.
+    it 'refuses a placed call the connector answered without an id' do
+      results['call.start'] = {}
+
+      expect { backend.start_call(model::Commands::CallStart.new(to: caller_address, sdp: 'x'), idempotency_key: 'k') }
+        .to raise_error(Whatsapp::Session::Errors::InvalidPayload, /without a call_id/)
+    end
   end
 end

@@ -32,7 +32,7 @@ RSpec.describe Conversations::EventDataPresenter do
         contact_last_seen_at: conversation.contact_last_seen_at.to_i,
         agent_last_seen_at: conversation.agent_last_seen_at.to_i,
         created_at: conversation.created_at.to_i,
-        updated_at: conversation.updated_at.to_f,
+        updated_at: Conversation.find(conversation.id).updated_at.to_f,
         waiting_since: conversation.waiting_since.to_i,
         priority: nil,
         unread_count: 0
@@ -42,6 +42,16 @@ RSpec.describe Conversations::EventDataPresenter do
     it 'returns push event payload' do
       # the exceptions are the values that would be added in enterprise edition.
       expect(presenter.push_data.except(:applied_sla, :sla_events)).to include(expected_data)
+    end
+
+    # The conversation that was just saved keeps the clock's full resolution (nanoseconds on Linux)
+    # while Postgres keeps microseconds; the version a consumer compares must be the stored one.
+    it 'ships the updated_at the database stores, not the sub-microsecond clock of the record in memory' do
+      conversation.update!(updated_at: Time.zone.at(1_791_823_361, 121_236_812, :nsec))
+
+      stored = Conversation.find(conversation.id).updated_at.to_f
+      expect(stored).to eq(Time.zone.at(1_791_823_361, 121_236, :usec).to_f)
+      expect(presenter.push_data[:updated_at]).to eq(stored)
     end
   end
 
@@ -177,6 +187,24 @@ RSpec.describe Conversations::EventDataPresenter do
 
       expect(snippet.class).to eq(String)
       expect(snippet).not_to include('<')
+    end
+  end
+
+  # The cable copy is what moves the banner after a recheck, so it has to carry the field the
+  # REST partial carries, on the same terms.
+  describe '#push_data whatsapp_missing_checked_at' do
+    it 'carries the date a WhatsApp number was found to have no account' do
+      channel = create(:channel_whatsapp, provider: 'baileys', validate_provider_config: false, sync_templates: false)
+      checked_at = 2.days.ago.change(usec: 0)
+      contact_inbox = create(:contact_inbox, inbox: channel.inbox, whatsapp_missing_checked_at: checked_at)
+      whatsapp_conversation = create(:conversation, account: channel.account, inbox: channel.inbox,
+                                                    contact: contact_inbox.contact, contact_inbox: contact_inbox)
+
+      expect(described_class.new(whatsapp_conversation).push_data[:whatsapp_missing_checked_at]).to eq(checked_at.to_i)
+    end
+
+    it 'leaves it out of conversations that are not on WhatsApp' do
+      expect(presenter.push_data).not_to have_key(:whatsapp_missing_checked_at)
     end
   end
 end

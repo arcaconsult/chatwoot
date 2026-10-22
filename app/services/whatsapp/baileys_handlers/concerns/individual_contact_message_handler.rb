@@ -42,6 +42,8 @@ module Whatsapp::BaileysHandlers::Concerns::IndividualContactMessageHandler
     # set_conversation so a blank webhook can't open/create a stray thread.
     return mark_existing_reaction_as_removed(sender: @contact) if reaction_removal?
 
+    return if Whatsapp::BlockedSender.silenced?(@contact, from_me: !incoming?)
+
     set_first_touch_attribution
     set_conversation
     handle_create_message
@@ -84,13 +86,20 @@ module Whatsapp::BaileysHandlers::Concerns::IndividualContactMessageHandler
     contact_inbox = ::ContactInboxWithContactBuilder.new(
       source_id: source_id,
       inbox: inbox,
-      contact_attributes: { name: contact_name, phone_number: ("+#{phone}" if phone), identifier: identifier }
+      contact_attributes: { name: contact_name, phone_number: ("+#{phone}" if phone), identifier: identifier,
+                            phone_number_candidates: alternate_contact_phone_numbers(phone) }
     ).perform
 
     @contact_inbox = contact_inbox
     @contact = contact_inbox.contact
 
     update_contact_info(phone, identifier)
+  end
+
+  # A contact created by hand or through the API has no contact_inbox, so nothing but its
+  # number finds it, and WhatsApp may report that number in another format (#776).
+  def alternate_contact_phone_numbers(phone)
+    Whatsapp::PhoneNumberNormalizationService.new(inbox).alternate_contact_phone_numbers(phone).presence
   end
 
   def update_contact_info(phone, identifier)

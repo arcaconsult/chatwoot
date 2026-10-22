@@ -54,7 +54,7 @@
             "PAIRING_CODE_STEP_2": "Ve a Dispositivos vinculados y toca Vincular un dispositivo.",
             "PAIRING_CODE_STEP_3": "Toca \"Vincular con número de teléfono\" e ingresa el código de arriba.",
             "PAIRING_CODE_EXPIRES": "El código dura unos minutos. Pide otro si caduca.",
-            "RECONNECTING": "Conectando...",
+            "RECONNECTING": "Reconectando...",
             "LINK_DEVICE": "Vincular dispositivo",
             "DISCONNECT": "Desconectar",
             "CONNECTED": "Su dispositivo se conectó correctamente. Ya puede empezar a enviar y recibir mensajes.",
@@ -87,7 +87,28 @@
             "HISTORY_SYNC": {
               "LABEL": "Importar conversaciones antiguas al vincular",
               "DESCRIPTION": "Trae el historial que el teléfono ofrece al vincular, todo como conversaciones resueltas. Los mensajes recibidos mientras la conexión estuvo caída se recuperan igual."
+            },
+            "PROXY_URL": {
+              "LABEL": "Proxy (opcional)",
+              "PLACEHOLDER": "socks5://usuario:contraseña{'@'}host:puerto",
+              "DESCRIPTION": "El WhatsApp de esta bandeja sale por esta dirección. Déjalo vacío para conectar directamente. Las llamadas de WhatsApp no pasan por un proxy: guardar uno desactiva las llamadas de esta bandeja.",
+              "ERROR": "Usa una dirección http, https o socks5 con host"
             }
+          }
+        },
+        "LEGACY_PROVIDER": {
+          "BADGE": "Heredado",
+          "BADGE_DESCRIPTION": "Este proveedor sigue funcionando y no recibe funciones nuevas.",
+          "NOTICE": "Este proveedor es heredado. Sigue funcionando.",
+          "NOTICE_WITH_NATIVE": "Este proveedor es heredado. Sigue funcionando, pero recomendamos usar WhatsApp (nativo) en su lugar.",
+          "CONVERT_TO_NATIVE": "Convertir a WhatsApp (nativo)",
+          "USE_NATIVE": "Usar WhatsApp (nativo)"
+        },
+        "MANUAL_SETUP": {
+          "APP_SECRET": {
+            "LABEL": "Clave secreta de la aplicación",
+            "PLACEHOLDER": "Pega la clave secreta de tu aplicación de Meta",
+            "HELP": "En tu aplicación de developers.facebook.com, abre Configuración de la app > Básica y copia la Clave secreta de la app. Confirma que cada webhook viene realmente de Meta."
           }
         }
       }
@@ -140,11 +161,37 @@
       "WHATSAPP_CLIENT_TOKEN_TITLE": "Token de seguridad",
       "WHATSAPP_CLIENT_TOKEN_SUBHEADER": "Su Client Token de Z-API (vea la pestaña Security en el panel de Z-API).",
       "WHATSAPP_CLIENT_TOKEN_UPDATE_TITLE": "Actualizar el token de seguridad",
-      "WHATSAPP_CLIENT_TOKEN_UPDATE_SUBHEADER": "Introduzca aquí el nuevo token de seguridad"
+      "WHATSAPP_CLIENT_TOKEN_UPDATE_SUBHEADER": "Introduzca aquí el nuevo token de seguridad",
+      "WHATSAPP_APP_SECRET": {
+        "TITLE": "Clave secreta de la aplicación",
+        "HELP": "La clave secreta de la aplicación de Meta que generó el token de acceso de esta bandeja. Confirma que cada webhook viene realmente de Meta.",
+        "MISSING": "Esta bandeja no tiene la clave secreta de la aplicación, así que sus webhooks se aceptan sin comprobar que vengan de Meta. Una versión futura los rechazará: agrega la clave para seguir recibiendo mensajes.",
+        "CONFIGURED": "Clave secreta configurada",
+        "PLACEHOLDER": "Pega la clave secreta",
+        "ADD": "Agregar",
+        "REPLACE": "Reemplazar",
+        "SUCCESS": "Clave secreta guardada",
+        "ERROR": "No se pudo guardar la clave secreta. Verifica que sea de la misma aplicación de Meta que generó el token de acceso de esta bandeja."
+      },
+      "ZAPI_WEBHOOK_URL": {
+        "TITLE": "Dirección de recepción",
+        "HELP": "Z-API entrega los mensajes de esta bandeja en una dirección con una clave propia. Si esa dirección aparece donde no debería, como en un log o en un ticket de soporte, genera una nueva: Z-API pasa a usarla y la anterior deja de funcionar.",
+        "BUTTON": "Generar nueva dirección",
+        "SUCCESS": "Nueva dirección registrada en Z-API.",
+        "ERROR": "Z-API no aceptó la nueva dirección. La bandeja sigue recibiendo por la actual; inténtalo de nuevo."
+      },
+      "WHATSAPP_DISCONNECTED": {
+        "MESSAGE": "Este WhatsApp está desconectado, y la bandeja no envía ni recibe mensajes. Conecta el teléfono para vincularlo de nuevo.",
+        "CONNECT": "Conectar"
+      }
     },
     "ASSIGNMENT": {
       "PREVENT_TAKEOVER": "Impedir que otro agente tome la conversación",
-      "PREVENT_TAKEOVER_SUB_TEXT": "Cuando un agente toma una conversación, solo él o un administrador pueden cambiar quién la atiende. La asignación automática no se ve afectada."
+      "PREVENT_TAKEOVER_SUB_TEXT": "Cuando un agente toma una conversación, solo él o un administrador pueden cambiar quién la atiende. La asignación automática no se ve afectada.",
+      "REOPEN_TEAM": {
+        "TITLE": "Al reabrir, mantener al responsable solo si está en el equipo de la conversación",
+        "DESCRIPTION": "Cuando el mensaje de un cliente reabre una conversación resuelta o pospuesta que tiene equipo, el responsable la conserva solo si es miembro de ese equipo. Si no, la conversación pasa a Sin asignar, con su equipo y etiquetas."
+      }
     },
     "CSAT": {
       "TEMPLATE_MODE": {
@@ -195,6 +242,16 @@
       "EDIT": {
         "BUTTON_TEXT": "Actualizar",
         "SUCCESS_MESSAGE": "Continuidad de la conversación actualizada correctamente"
+      }
+    },
+    "WHATSAPP_CALLING": {
+      "ENABLE": {
+        "PAIRED_DESCRIPTION": "Permite que los agentes reciban y hagan llamadas de WhatsApp en esta bandeja, a través del teléfono vinculado a ella. Los clientes pueden llamar a este número directamente desde WhatsApp.",
+        "PROXY_BLOCKED": "Esta bandeja sale por un proxy, y las llamadas de WhatsApp no pasan por un proxy: la voz va directo del servidor a WhatsApp. Para activar las llamadas, quita el proxy en la pestaña {tab}.",
+        "CONNECTOR_WITHOUT_CALLS": "El conector de WhatsApp de esta instalación no lleva la voz de las llamadas. Para activar las llamadas, define WAC_CALLS_UDP_PORT (por ejemplo 40000) y publica ese puerto en UDP en el contenedor donde corre el conector (el worker de Sidekiq, en modo embebido). Detrás de NAT, define también WAC_CALLS_PUBLIC_IP con la IP pública del servidor."
+      },
+      "INBOUND_PHONE": {
+        "DESCRIPTION": "Permite que los clientes llamen a este número y que la llamada suene para los agentes aquí. Si está desactivado, Chatwoot no suena y la llamada sigue sonando solo en el teléfono vinculado. Los agentes aún pueden hacer llamadas salientes."
       }
     }
   }

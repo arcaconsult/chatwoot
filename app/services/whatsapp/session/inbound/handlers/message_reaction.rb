@@ -30,8 +30,13 @@ class Whatsapp::Session::Inbound::Handlers::MessageReaction < Whatsapp::Session:
   def remove
     known = payload.from_me ? nil : inbound::ContactLookup.contact(inbox: inbox, party: peer_party)
     return :deferred unless recorded?(known)
-    return :ignored unless inbound::ReactionStore.active?(inbox: inbox, target_id: payload.target_id,
-                                                          sender: known, from_me: payload.from_me)
+
+    unless inbound::ReactionStore.active?(inbox: inbox, target_id: payload.target_id, sender: known, from_me: payload.from_me)
+      # Nothing to take away, but the removal still dates the last one: a reaction replayed
+      # after it, off the ordered stream, is measured against this.
+      store(known).note_removal
+      return :ignored
+    end
 
     store(sender_contact).remove ? :handled : :ignored
   end
@@ -63,13 +68,20 @@ class Whatsapp::Session::Inbound::Handlers::MessageReaction < Whatsapp::Session:
     return :deferred if target.nil?
 
     contact_inbox = resolve_contact_inbox
-    return :ignored if contact_inbox.nil?
+    return :ignored if contact_inbox.nil? || silenced?(contact_inbox.contact)
 
-    written = store(payload.chat.group? ? sender_contact : contact_inbox.contact).write(target.conversation)
+    written = store(reactor(contact_inbox)).write(target.conversation)
     # nil when a newer reaction from the same sender is already on the bubble, which is
     # what an emoji swap looks like when its two halves arrive the wrong way round.
     written.nil? ? :ignored : :handled
   end
+
+  # Who the reaction is filed under: the contact of a 1:1 chat, the author in a group.
+  def reactor(contact_inbox) = payload.chat.group? ? sender_contact : contact_inbox.contact
+
+  # Whatsapp::BlockedSender, in a 1:1 chat only: in a group the contact resolved here is the
+  # group itself.
+  def silenced?(contact) = !payload.chat.group? && Whatsapp::BlockedSender.silenced?(contact, from_me: payload.from_me)
 
   def store(sender)
     inbound::ReactionStore.new(inbox: inbox, reaction: payload, sender: sender)

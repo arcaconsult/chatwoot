@@ -12,6 +12,8 @@ es:
     messages:
       deleted: Este mensaje fue eliminado
   errors:
+    articles:
+      invalid_sort: Orden de artículos desconocido. Usa updated_at, created_at, title o views, con - delante para orden descendente.
     request:
       unexpected: No se pudo completar la solicitud.
     account:
@@ -39,6 +41,12 @@ es:
       messaging_window_closed: La ventana de respuesta de Meta para este contacto se cerró. Se reabre cuando el contacto envíe un mensaje nuevo.
       messaging_window_closed_for_automation: Meta solo acepta respuestas automáticas hasta 24 horas después del último mensaje del contacto. Toma la conversación para responder como agente.
     whatsapp:
+      calls:
+        group_not_supported: No se puede llamar a un grupo
+        proxy_unsupported: 'Las llamadas de WhatsApp no pasan por un proxy. Quita el proxy de esta bandeja para activar las llamadas.'
+        connector_without_calls: 'El conector de WhatsApp de esta instalación no lleva la voz de las llamadas: necesita WAC_CALLS_UDP_PORT definido y ese puerto publicado en UDP.'
+        provider_unsupported: 'Este proveedor de WhatsApp no hace llamadas.'
+        channel_voice_required: 'Las llamadas no están disponibles en el plan de esta cuenta.'
       group_announcement_only: Solo los administradores pueden enviar mensajes en este grupo
       group_description_cannot_be_removed: WhatsApp no permite eliminar la descripción de un grupo una vez definida. Reemplace el texto en lugar de borrarlo.
     inboxes:
@@ -85,6 +93,7 @@ es:
           connect_failed: El conector no pudo comunicarse con WhatsApp. Los reintentos continúan automáticamente.
           disconnect_requested: 'Esta conexión fue cerrada desde aquí. La vinculación sigue válida: conecte de nuevo para retomarla.'
           disconnected: La conexión con WhatsApp se cayó. Los reintentos continúan automáticamente.
+          proxy_unreachable: La conexión con WhatsApp no está pasando por el proxy de esta bandeja de entrada. Revisa la dirección del proxy en la configuración de la bandeja de entrada, o elimínala para conectar directamente. Los nuevos intentos continúan automáticamente.
   notifications:
     notification_title:
       internal_chat_mention: Le mencionaron en %{name}
@@ -130,6 +139,9 @@ es:
       recurring_message_completed: La serie de mensajes programados recurrentes terminó después de %{count} repeticiones.
       recurring_message_cancelled: "%{agent} detuvo el mensaje programado recurrente."
       unknown_agent: Desconocido
+      assignee:
+        removed_not_in_conversation_team: "Conversación desasignada de %{assignee_name} porque no es miembro del equipo de la conversación, %{team_name}"
+        handed_to_agent_bot_on_reopen: "Conversación pasada de %{assignee_name} a %{bot_name} porque el cliente volvió a escribir"
   contacts:
     group:
       inbox_id_required: Este grupo está en más de una bandeja de entrada. Indique por cuál vale la acción enviando inbox_id.
@@ -165,3 +177,12 @@ es:
         fourth: cuarto
         fifth: quinto
         last: último
+  reports:
+    agent_csv:
+      handled_count: Conversaciones atendidas
+    team_csv:
+      handled_count: Conversaciones atendidas
+    inbox_csv:
+      handled_count: Conversaciones atendidas
+      avg_customer_waiting_time: Tiempo promedio de espera del cliente
+      resolution_count: Recuento de resoluciones

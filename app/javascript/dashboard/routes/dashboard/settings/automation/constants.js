@@ -3,11 +3,23 @@ import {
   OPERATOR_TYPES_2,
   OPERATOR_TYPES_3,
   OPERATOR_TYPES_6,
+  CAPTAIN_OPERATOR_TYPES,
 } from './operators';
+
+// Free-text condition judged by Captain when the rule runs; offered on every event.
+export const CAPTAIN_CONDITION = {
+  key: 'captain_condition',
+  name: 'CAPTAIN',
+  inputType: 'long_text',
+  placeholder: 'CAPTAIN',
+  maxLength: 500,
+  filterOperators: CAPTAIN_OPERATOR_TYPES,
+};
 
 export const AUTOMATIONS = {
   message_created: {
     conditions: [
+      CAPTAIN_CONDITION,
       {
         key: 'message_type',
         name: 'MESSAGE_TYPE',
@@ -172,6 +184,7 @@ export const AUTOMATIONS = {
   },
   conversation_created: {
     conditions: [
+      CAPTAIN_CONDITION,
       {
         key: 'status',
         name: 'STATUS',
@@ -310,6 +323,7 @@ export const AUTOMATIONS = {
   },
   conversation_updated: {
     conditions: [
+      CAPTAIN_CONDITION,
       {
         key: 'status',
         name: 'STATUS',
@@ -464,6 +478,7 @@ export const AUTOMATIONS = {
   },
   conversation_opened: {
     conditions: [
+      CAPTAIN_CONDITION,
       {
         key: 'browser_language',
         name: 'BROWSER_LANGUAGE',
@@ -604,6 +619,7 @@ export const AUTOMATIONS = {
   },
   conversation_resolved: {
     conditions: [
+      CAPTAIN_CONDITION,
       {
         key: 'browser_language',
         name: 'BROWSER_LANGUAGE',
@@ -735,7 +751,18 @@ export const AUTOMATIONS = {
 // reference. #667
 AUTOMATIONS.message_edited = structuredClone(AUTOMATIONS.message_created);
 
+// A monitor match is a conversation event. Additional conditions filter the
+// conversation at delivery time; the monitor itself supplies the trigger.
+AUTOMATIONS.monitor_matched = {
+  conditions: structuredClone(AUTOMATIONS.conversation_updated.conditions),
+  actions: structuredClone(AUTOMATIONS.conversation_updated.actions),
+};
+
 export const AUTOMATION_RULE_EVENTS = [
+  {
+    key: 'monitor_matched',
+    value: 'MONITOR_MATCHED',
+  },
   {
     key: 'conversation_created',
     value: 'CONVERSATION_CREATED',
@@ -868,6 +895,11 @@ export const AUTOMATION_ACTION_TYPES = [
     label: 'ADD_SLA',
     inputType: 'search_select',
   },
+  {
+    key: 'remove_custom_attribute',
+    label: 'REMOVE_CUSTOM_ATTRIBUTE',
+    inputType: 'multi_select',
+  },
 ];
 
 // Default delay for scheduled messages (24 hours in minutes)
@@ -882,6 +914,14 @@ export const DEFAULT_TRIGGER_STATUS = 'pending';
 // unresponsive cases (reply-chase / awaiting-agent), or a chosen status for conversation_updated.
 export const DELAYED_TRIGGERS = [
   { key: 'conversation_status', eventName: 'conversation_updated' },
+  // The only trigger whose wait is not about one state or one message: it measures the time since
+  // anything at all happened on the conversation, so the rule carries `execution_delay_trigger`
+  // for the backend to anchor its episode on activity instead of on the status clock.
+  {
+    key: 'conversation_inactive',
+    eventName: 'conversation_updated',
+    delayTrigger: 'inactivity',
+  },
   {
     key: 'customer_unresponsive',
     eventName: 'message_created',

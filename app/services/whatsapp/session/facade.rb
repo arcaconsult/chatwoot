@@ -11,6 +11,7 @@ class Whatsapp::Session::Facade
   include Whatsapp::Session::Facade::Groups
   include Whatsapp::Session::Facade::History
   include Whatsapp::Session::Facade::Presence
+  include Whatsapp::Session::Facade::Calls
 
   attr_reader :channel, :backend, :provider, :instance
 
@@ -82,7 +83,7 @@ class Whatsapp::Session::Facade
     backend.connect(
       model::Commands::SessionConnect.new(
         pairing: 'resume', phone: channel.phone_number.to_s.delete('+'),
-        groups: capability?('groups'), calls: call_policy, history_sync: history_sync?
+        groups: capability?('groups'), calls: call_policy, history_sync: history_on_connect?, proxy: proxy
       )
     )
   end
@@ -104,6 +105,16 @@ class Whatsapp::Session::Facade
       "which leaves the pairing alive on the provider for inbox #{channel.inbox&.id}"
     )
     backend.disconnect
+  end
+
+  # The operator's Disconnect, which keeps the inbox and therefore its session id. A logout
+  # and not the teardown above: deleting the session has the connector forget it, epoch
+  # counter included, so the pairing after it would start again at epoch 1 under the epoch
+  # and position Chatwoot kept for the old session, and every event of it, the QR first,
+  # would be dropped (fazer-ai/chatwoot#852). The contract keeps the counter across a logout
+  # for exactly this: the account can be paired again under the same id.
+  def logout_channel_provider
+    backend.logout
   end
 
   # Session providers pair a real phone: there is no template catalog to sync and no
@@ -194,7 +205,10 @@ class Whatsapp::Session::Facade
   # the digits off this JID and write them to `contacts.phone_number` (and to the contact
   # inbox's source id), so answering with a LID renames the contact after an opaque
   # internal id and then addresses it at `<lid>@s.whatsapp.net`, which reaches nobody.
-  def on_whatsapp(recipient_id)
+  #
+  # Takes `deadline:` like Baileys; each backend's number check already has a short ceiling of
+  # its own.
+  def on_whatsapp(recipient_id, **)
     digits = recipient_id.to_s.split('@').first.to_s.delete('+')
     check = backend.check_numbers(model::Commands::ContactCheck.new(phones: [digits])).first
     return { 'jid' => "#{digits}@s.whatsapp.net", 'exists' => false } if check.blank?
@@ -224,16 +238,32 @@ class Whatsapp::Session::Facade
     # resume that answers `open` has nothing left to poll, and a chain started over one
     # would write `connect_failure` over a healthy connection the first time a request
     # failed.
-    writer.apply(state.with_attempt(attempt), reset: true, attempt: attempt, provider: provider, instance: instance)
+    writer.apply(state.with_attempt(attempt), reset: true, attempt: attempt, provider: provider, instance: instance, answering: true)
     start_pairing_poll(mode, attempt) if state.connecting? && backend.class.state_polling?
     state
   end
 
-  # An object in the contract, not a flag: the field says how calls are handled, and the
-  # only policy this layer has is to reject them. Omitted when the backend does not do
-  # calls at all, because `false` is not a value the schema accepts either.
+  # An object in the contract, not a flag: the field says how calls are handled. Omitted
+  # when the backend does not do calls at all, because `false` is not a value the schema
+  # accepts either, and omitted on an inbox without calling, so the phone rings as it
+  # always did (#850).
+  #
+  # An inbox with calling on asks the connector to carry the voice. Never with
+  # `auto_reject`: the connector reads that as "no calls on this session", the placed ones
+  # included, and a refusal from a linked device ends the call on every device of the
+  # account, the phone included.
   def call_policy
-    { 'auto_reject' => true } if capability?('calls')
+    return unless capability?('calls')
+
+    { 'answer' => true } if channel.voice_enabled?
+  end
+
+  # What the inbox names as its way out, in the shape the connector takes. Nothing is a
+  # request to go out directly: every connect states the whole request, so a connect that
+  # left the proxy out would take a session off the one it had.
+  def proxy
+    url = channel.provider_config['proxy_url'].presence
+    { 'url' => url } if url
   end
 
   def writer
@@ -262,7 +292,7 @@ class Whatsapp::Session::Facade
     backend.connect(
       model::Commands::SessionConnect.new(
         pairing: mode, phone: channel.phone_number.to_s.delete('+'),
-        groups: capability?('groups'), calls: call_policy, history_sync: history_sync?
+        groups: capability?('groups'), calls: call_policy, history_sync: history_on_connect?, proxy: proxy
       )
     )
   rescue Whatsapp::Session::Errors::Error

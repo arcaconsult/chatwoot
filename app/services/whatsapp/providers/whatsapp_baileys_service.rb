@@ -147,6 +147,13 @@ class Whatsapp::Providers::WhatsappBaileysService < Whatsapp::Providers::BaseSer
   # the stall warning cleared while the wedged socket was still there, which is the one
   # state where the UI stops telling anyone anything is wrong. The teardown callers that
   # legitimately do not care are the ones that catch it (see Channel::Whatsapp).
+  # Whether this inbox reaches any Baileys provider at all: its own URL or the
+  # installation's. Without either there is nothing to ask, and a request would go to an
+  # empty host.
+  def provider_configured?
+    provider_url.present?
+  end
+
   def disconnect_channel_provider
     response = HTTParty.delete(
       "#{provider_url}/connections/#{whatsapp_channel.phone_number}",
@@ -594,17 +601,21 @@ class Whatsapp::Providers::WhatsappBaileysService < Whatsapp::Providers::BaseSer
     response.parsed_response&.deep_symbolize_keys
   end
 
-  def on_whatsapp(recipient_id)
+  # `deadline` is how long the caller can afford to wait: `:hint` for a lookup that only shows a
+  # hint and treats silence as "I do not know" (the compose warning), `:request` for one a web
+  # request waits on (starting a conversation), `:provider` for a job that can wait as long as
+  # the provider may take (the recheck). One call per ceiling, each naming its own, so the fences
+  # in baileys_request_options_spec and request_ceilings_spec read which one is in force.
+  def on_whatsapp(recipient_id, deadline: :provider)
     @recipient_id = recipient_id
+    url = "#{provider_url}/connections/#{whatsapp_channel.phone_number}/on-whatsapp"
+    body = { jids: [remote_jid] }.to_json
 
-    response = HTTParty.post(
-      "#{provider_url}/connections/#{whatsapp_channel.phone_number}/on-whatsapp",
-      headers: api_headers,
-      body: {
-        jids: [remote_jid]
-      }.to_json,
-      **BAILEYS_REQUEST_OPTIONS
-    )
+    response = case deadline
+               when :hint then HTTParty.post(url, headers: api_headers, body: body, **BAILEYS_SHORT_REQUEST_OPTIONS)
+               when :request then HTTParty.post(url, headers: api_headers, body: body, **BAILEYS_IN_REQUEST_OPTIONS)
+               else HTTParty.post(url, headers: api_headers, body: body, **BAILEYS_REQUEST_OPTIONS)
+               end
 
     raise ProviderUnavailableError unless process_response(response)
 
@@ -1295,6 +1306,10 @@ class Whatsapp::Providers::WhatsappBaileysService < Whatsapp::Providers::BaseSer
     end
   end
 
+  # `on_whatsapp` is left out on purpose: it is a read whose every caller treats a failure as
+  # "unknown" (the contact builder, the compose form's warning, the no-WhatsApp recheck), so a
+  # 500 on one number lookup must not mark a working session 'close' and show the agent a
+  # disconnected inbox. A connection that is really down is caught by the connection check.
   with_error_handling :setup_channel_provider,
                       :send_message,
                       :toggle_typing_status,
@@ -1305,7 +1320,6 @@ class Whatsapp::Providers::WhatsappBaileysService < Whatsapp::Providers::BaseSer
                       :received_messages,
                       :group_metadata,
                       :sync_group,
-                      :on_whatsapp,
                       :delete_message,
                       :edit_message,
                       :group_leave,

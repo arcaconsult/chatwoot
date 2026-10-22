@@ -244,7 +244,7 @@ RSpec.describe 'Inboxes API', type: :request do
       it 'does not flag reauthorization_required for manual whatsapp channel even when reauth required' do
         whatsapp_channel = create(:channel_whatsapp, account: account, provider: 'whatsapp_cloud', sync_templates: false,
                                                      validate_provider_config: false)
-        whatsapp_channel.update!(provider_config: whatsapp_channel.provider_config.merge('source' => 'manual'))
+        whatsapp_channel.update!(provider_config: whatsapp_channel.provider_config.merge('source' => 'manual', 'app_secret' => 's'))
         whatsapp_inbox = create(:inbox, channel: whatsapp_channel, account: account)
         whatsapp_channel.prompt_reauthorization!
 
@@ -672,6 +672,36 @@ RSpec.describe 'Inboxes API', type: :request do
         expect(inbox.reload.enable_auto_assignment).to be_falsey
         expect(inbox.reload.portal_id).to eq(portal.id)
         expect(response.parsed_body['name']).to eq 'new test inbox'
+      end
+
+      it 'turns the reopen team setting on and off and exposes it' do
+        patch "/api/v1/accounts/#{account.id}/inboxes/#{inbox.id}",
+              headers: admin.create_new_auth_token, params: { drop_assignee_outside_team_on_reopen: true }, as: :json
+
+        expect(response).to have_http_status(:success)
+        expect(response.parsed_body['drop_assignee_outside_team_on_reopen']).to be(true)
+        expect(inbox.reload.drop_assignee_outside_team_on_reopen).to be(true)
+
+        get "/api/v1/accounts/#{account.id}/inboxes/#{inbox.id}", headers: admin.create_new_auth_token, as: :json
+        expect(response.parsed_body['drop_assignee_outside_team_on_reopen']).to be(true)
+
+        patch "/api/v1/accounts/#{account.id}/inboxes/#{inbox.id}",
+              headers: admin.create_new_auth_token, params: { drop_assignee_outside_team_on_reopen: false }, as: :json
+
+        expect(response.parsed_body['drop_assignee_outside_team_on_reopen']).to be(false)
+        expect(inbox.reload.drop_assignee_outside_team_on_reopen).to be(false)
+      end
+
+      it 'refuses a reopen team setting that is not a boolean, without touching it' do
+        inbox.update!(drop_assignee_outside_team_on_reopen: true)
+
+        ['false', 0, '', nil, 'null', [false]].each do |value|
+          patch "/api/v1/accounts/#{account.id}/inboxes/#{inbox.id}",
+                headers: admin.create_new_auth_token, params: { drop_assignee_outside_team_on_reopen: value }, as: :json
+
+          expect(response).to have_http_status(:unprocessable_entity), "accepted #{value.inspect}"
+          expect(inbox.reload.drop_assignee_outside_team_on_reopen).to be(true)
+        end
       end
 
       it 'updates api inbox when administrator' do
@@ -2308,7 +2338,7 @@ RSpec.describe 'Inboxes API', type: :request do
     let(:channel) { create(:channel_whatsapp, account: account, provider: 'baileys', validate_provider_config: false, sync_templates: false) }
     let(:inbox) { channel.inbox }
     let(:new_cloud_config) do
-      { api_key: 'new_cloud_key', phone_number_id: 'new_phone_id', business_account_id: 'new_waba_id' }
+      { api_key: 'new_cloud_key', phone_number_id: 'new_phone_id', business_account_id: 'new_waba_id', app_secret: 'new_secret' }
     end
 
     before do
@@ -2318,6 +2348,7 @@ RSpec.describe 'Inboxes API', type: :request do
         .to_return(status: 200, body: { data: [] }.to_json, headers: { 'Content-Type' => 'application/json' })
       stub_request(:get, %r{graph\.facebook\.com/v\d+\.\d+/.*/phone_numbers.*})
         .to_return(status: 200, body: { data: [{ id: 'new_phone_id' }] }.to_json, headers: { 'Content-Type' => 'application/json' })
+      stub_request(:get, %r{graph\.facebook\.com/v\d+\.\d+/me\?}).to_return(status: 200, body: { id: '1' }.to_json)
       webhook_setup_service = instance_double(Whatsapp::WebhookSetupService, perform: nil)
       allow(Whatsapp::WebhookSetupService).to receive(:new).and_return(webhook_setup_service)
     end
@@ -2489,6 +2520,18 @@ RSpec.describe 'Inboxes API', type: :request do
              as: :json
 
         expect(response).to have_http_status(:ok)
+      end
+
+      it 'passes an advisory lookup on to the provider' do
+        service_double = instance_double(Whatsapp::Providers::WhatsappBaileysService, on_whatsapp: { 'exists' => false })
+        allow(Whatsapp::Providers::WhatsappBaileysService).to receive(:new).with(whatsapp_channel: channel).and_return(service_double)
+
+        post "/api/v1/accounts/#{account.id}/inboxes/#{inbox.id}/on_whatsapp",
+             headers: admin.create_new_auth_token,
+             params: { phone_number: '+123456789', advisory: true },
+             as: :json
+
+        expect(service_double).to have_received(:on_whatsapp).with('+123456789', deadline: :hint)
       end
 
       it 'calls on_whatsapp when supported and returns default response on no response from provider' do

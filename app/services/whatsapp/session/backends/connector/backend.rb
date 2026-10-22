@@ -22,6 +22,11 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
   # holding a worker indefinitely.
   MEDIA_SEND_MAX_TIMEOUT = ENV.fetch('WHATSAPP_MEDIA_SEND_MAX_TIMEOUT', 180).to_i
 
+  # Seconds between the attempts at a group creation the connector answered `not_settled`.
+  # Four attempts over three and a half seconds: the notification that settles one
+  # ordinarily arrives within seconds, and the creation runs inside an HTTP request.
+  NOT_SETTLED_WAITS = [0.5, 1, 2].freeze
+
   # --- the ceiling on a published command ------------------------------------------
   #
   # A published command carries no `reply_to`, so nobody here is waiting to give up on it
@@ -41,6 +46,9 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
   # after the agent went offline flips the account back, and a `composing` applied minutes
   # later is a typing bubble for something nobody is typing.
   MOMENTARY_TIMEOUT = 30
+
+  # Under the 15 s a request may run: see `check_numbers`.
+  NUMBER_CHECK_TIMEOUT = 5
 
   # These are still right whenever they land, so the only reason to bound them is the
   # executor, and the ceiling has to clear the longest command that can legitimately be
@@ -67,6 +75,9 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
   # the unlink runs outside this ceiling, by contract.
   TEARDOWN_RUNTIME = 30
 
+  # A hang-up answered by WhatsApp at once; what this bounds is one parked on a socket.
+  CALL_HANGUP_RUNTIME = 30
+
   class << self
     def provider_key
       'native'
@@ -82,10 +93,30 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
       true
     end
 
-    # The session id is generated when the inbox is saved; the rest of the config is
-    # optional toggles, so there is nothing that can be missing here.
-    def validate_config(_provider_config)
-      []
+    # The connector files what arrived while the session was down in the same dump as the
+    # archive, and publishes neither without being asked at connect.
+    def history_on_every_connect?
+      true
+    end
+
+    def history_needs_anchor?
+      true
+    end
+
+    PROXY_SCHEMES = %w[http https socks5].freeze
+
+    # The session id is generated when the inbox is saved and the toggles are optional, so
+    # nothing can be missing here. What can be wrong is the proxy: the connector takes
+    # http, https or socks5 with a host and refuses anything else with `invalid_payload`,
+    # which is better said while the operator is still on the form than on the connect.
+    def validate_config(provider_config)
+      url = provider_config['proxy_url'].to_s
+      return [] if url.blank?
+
+      uri = URI.parse(url)
+      PROXY_SCHEMES.include?(uri.scheme) && uri.host.present? ? [] : ['proxy_url']
+    rescue URI::InvalidURIError
+      ['proxy_url']
     end
   end
 
@@ -106,6 +137,10 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
     # stream and a connect written straight to it would sit there until its deadline.
     # The wake goes on the control stream, which every instance reads, and asks whichever
     # answers to take the session before the connect lands on it.
+    #
+    # Asking to connect withdraws any teardown still owed to this session, so a retry of
+    # one the connector never attempted does not end the session being set up now.
+    Whatsapp::Session::TeardownRetry.withdrawn(session_id)
     client.control(commands::SessionWake.new(desired: 'connected'))
     model::ConnectionState.from_h(client.call(command))
   end
@@ -114,7 +149,16 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
     client.publish(commands::SessionDisconnect.new, max_runtime: TEARDOWN_RUNTIME)
   end
 
+  # The operator's Disconnect since it stopped deleting the session (fazer-ai/chatwoot#852),
+  # so it reaches the places the teardown below does, by the same means. A connector reads
+  # `wa:cmd:<sid>` only while it runs the session, and a session nobody owns -- handed back,
+  # or waiting out a resume backoff -- would leave the logout there undelivered: the wake, on
+  # the control stream, has some instance adopt it, and `disconnected` has it stop there
+  # instead of dialling. And the note is what lets a logout the connector never attempted be
+  # sent again while the inbox still exists; connecting withdraws it, as it does a teardown.
   def logout
+    Whatsapp::Session::TeardownRetry.requested(session_id)
+    client.control(commands::SessionWake.new(desired: 'disconnected'))
     client.publish(commands::SessionLogout.new, max_runtime: TEARDOWN_RUNTIME)
   end
 
@@ -148,13 +192,16 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
   # Logged here, which is the only place it can be. The connector answers a teardown it
   # could not carry out with `command.failed`, and that event is routed to an inbox by
   # `session_id`: the inbox this one is about has just been destroyed, so the lookup
-  # misses and the event is dropped as an orphan. What we publish is the last thing about
-  # this session that anybody can see.
+  # misses. The consumer acts on one answer before dropping the orphan, a teardown the
+  # connector never attempted, which Whatsapp::Session::TeardownRetry sends again; every
+  # other failure is dropped, and what we publish is the last thing about this session
+  # that anybody can see.
   #
   # The two ids go into the hash the log line carries. Ruby evaluates the values in the
   # order they are written, so the logout is still sent first, and a spec pins that
   # ordering rather than leaving it to be read out of this comment.
   def delete_session
+    Whatsapp::Session::TeardownRetry.requested(session_id)
     asked = { logout: client.publish(commands::SessionLogout.new, max_runtime: TEARDOWN_RUNTIME),
               delete: client.control(commands::SessionDelete.new, max_runtime: TEARDOWN_RUNTIME) }
     Rails.logger.info("[WHATSAPP] tearing session #{session_id} down for inbox #{channel.inbox&.id}: #{asked.to_json}")
@@ -211,6 +258,15 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
     model::SendResult.from_h(client.call(command, idempotency_key: "msg:#{command.message_id}"))
   end
 
+  # The answer is not this call's: the phone answers, when it is awake to, with
+  # `history.sync` events typed `on_demand`. A call rather than a publish so a refusal
+  # (a session that went down since the button was offered, an anchor the connector will
+  # not take) reaches the job that asked instead of being logged by nobody.
+  def request_history(command)
+    client.call(command)
+    nil
+  end
+
   def mark_read(command)
     client.publish(command, timeout: DEFERRABLE_TIMEOUT)
   end
@@ -253,8 +309,42 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
     client.publish(command, timeout: DEFERRABLE_TIMEOUT)
   end
 
-  def check_numbers(command)
-    Array(client.call(command)).map { |check| model::NumberCheck.from_h(check) }
+  # --- calls -----------------------------------------------------------------------
+
+  # An answer that lands after the caller gave up is not an answer, and a refusal that
+  # lands after the call stopped ringing refuses nothing, so both are momentary.
+  def accept_call(command)
+    client.publish(command, timeout: MOMENTARY_TIMEOUT)
+  end
+
+  def reject_call(command)
+    client.publish(command, timeout: MOMENTARY_TIMEOUT)
+  end
+
+  # A hang-up is still right whenever it lands, and the connector drops one for a call
+  # that already ended. So it takes the runtime ceiling, like the teardown: a deadline would
+  # throw away, unrun, a hang-up queued behind long media sends, after the call was already
+  # closed here, and nothing would send it again.
+  def terminate_call(command)
+    client.publish(command, max_runtime: CALL_HANGUP_RUNTIME)
+  end
+
+  # Rings somebody's phone, which a redelivery must not do twice: the key is what makes
+  # the connector answer a resend with the call it already placed.
+  def start_call(command, idempotency_key:, timeout: Whatsapp::Connector::Client::RPC_TIMEOUT)
+    result = client.call(command, idempotency_key: idempotency_key, timeout: timeout)
+    call_id = result.is_a?(Hash) ? result['call_id'] : nil
+    raise Whatsapp::Session::Errors::InvalidPayload, 'call.start answered without a call_id' if call_id.blank?
+
+    call_id
+  end
+
+  # Asked from inside a request, whose caller falls back to the typed number when the
+  # check fails, so the check gives up long before the request does (#838). On the RPC
+  # default it waited 20 s, past the request's own limit, and the fallback never ran. A
+  # dial asks inside its own budget and says how much of it the check may have.
+  def check_numbers(command, timeout: NUMBER_CHECK_TIMEOUT)
+    Array(client.call(command, timeout: timeout)).map { |check| model::NumberCheck.from_h(check) }
   end
 
   def profile_picture_url(command)
@@ -262,10 +352,33 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
     result.is_a?(Hash) ? result['url'] : result
   end
 
+  def resolve_contact(command, timeout: Whatsapp::Connector::Client::RPC_TIMEOUT)
+    model::Party.from_h(client.call(command, timeout: timeout))
+  end
+
   # --- groups --------------------------------------------------------------------
 
+  # The connector writes a group creation down before it asks WhatsApp, so a retry under
+  # the same key collects the group the first attempt made, and a retry under a fresh key
+  # makes a second one. `not_settled` says WhatsApp has not yet named which request made
+  # which group, which ordinarily takes seconds. The contract also names the state asking
+  # does not resolve, an intent recorded whose request never went out, so the waits are
+  # bounded and what survives them is logged as stranded rather than retried further.
   def create_group(command)
-    model::GroupInfo.from_h(client.call(command))
+    key = "group:#{SecureRandom.uuid}"
+    waits = NOT_SETTLED_WAITS.dup
+    begin
+      model::GroupInfo.from_h(client.call(command, idempotency_key: key))
+    rescue Whatsapp::Session::Errors::NotSettled
+      wait = waits.shift
+      if wait.nil?
+        Rails.logger.error("[WHATSAPP] group.create #{key} on session #{session_id} is stranded: " \
+                           "still not settled after #{NOT_SETTLED_WAITS.size + 1} attempts")
+        raise
+      end
+      Kernel.sleep(wait)
+      retry
+    end
   end
 
   def group_info(command)

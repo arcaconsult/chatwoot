@@ -459,6 +459,46 @@ describe Whatsapp::IncomingMessageBaileysService do
         expect(message.content_attributes[:external_created_at]).to eq(timestamp)
       end
 
+      # A contact created by hand or through the API has no contact_inbox, so nothing but
+      # its number can find it, and the builder matched that exactly: WhatsApp reporting
+      # the other ninth-digit form filed a second, unblocked contact that the bot answered
+      # (#776).
+      context 'when a contact with no contact_inbox holds the other ninth-digit form' do
+        [
+          ['5511998765432', '+551198765432', 'the message has the ninth digit'],
+          ['551198765432', '+5511998765432', 'the message has no ninth digit']
+        ].each do |reported, stored, label|
+          it "files the message under that contact when #{label}" do
+            existing = create(:contact, account: inbox.account, name: 'John Doe', phone_number: stored, blocked: true)
+            raw_message[:key][:remoteJidAlt] = "#{reported}@s.whatsapp.net"
+
+            expect { described_class.new(inbox: inbox, params: params).perform }
+              .not_to change(inbox.account.contacts, :count)
+
+            expect(inbox.contact_inboxes.sole.contact_id).to eq(existing.id)
+            expect(existing.reload.blocked).to be(true)
+            # Found, the block holds: nothing reaches the bot (#793).
+            expect(inbox.conversations).to be_empty
+          end
+        end
+
+        it 'does not take an Argentine landline for the mobile that reported' do
+          landline = create(:contact, account: inbox.account, name: 'Fixo', phone_number: '+541123456789')
+          raw_message[:key][:remoteJidAlt] = '5491123456789@s.whatsapp.net'
+
+          expect { described_class.new(inbox: inbox, params: params).perform }
+            .to change(inbox.account.contacts, :count).by(1)
+          expect(landline.reload.phone_number).to eq('+541123456789')
+        end
+
+        it 'does not reach a contact of another account' do
+          create(:contact, phone_number: '+551198765432')
+
+          expect { described_class.new(inbox: inbox, params: params).perform }
+            .to change(inbox.account.contacts, :count).by(1)
+        end
+      end
+
       context 'when updating contact avatar' do
         it 'enqueues the contact avatar update job for new contacts' do
           described_class.new(inbox: inbox, params: params).perform
@@ -1506,6 +1546,39 @@ describe Whatsapp::IncomingMessageBaileysService do
           expect(message.reload.status).to eq('failed')
           expect(message.external_error).to be_blank
         end
+
+        { 1 => 'sent', 2 => 'sent', 3 => 'delivered', 4 => 'read' }.each do |baileys_status, status|
+          it "clears the external_error when a failed message moves to #{status} (Baileys #{baileys_status})" do
+            message.update!(status: 'failed', external_error: 'WhatsApp error 479')
+            update_payload[:update][:status] = baileys_status
+
+            described_class.new(inbox: inbox, params: params).perform
+
+            expect(message.reload.status).to eq(status)
+            expect(message.external_error).to be_nil
+          end
+        end
+
+        it 'keeps the external_error of a failed message on an update that maps to no status' do
+          message.update!(status: 'failed', external_error: 'WhatsApp error 479')
+          update_payload[:update][:status] = 5
+
+          described_class.new(inbox: inbox, params: params).perform
+
+          expect(message.reload.status).to eq('failed')
+          expect(message.external_error).to eq('WhatsApp error 479')
+        end
+
+        it "does not mark a 'read' message as failed" do
+          message.update!(status: 'read')
+          update_payload[:update][:status] = 0
+          update_payload[:update][:messageStubParameters] = ['479']
+
+          described_class.new(inbox: inbox, params: params).perform
+
+          expect(message.reload.status).to eq('read')
+          expect(message.external_error).to be_nil
+        end
       end
 
       context 'when is a content update' do
@@ -1669,6 +1742,15 @@ describe Whatsapp::IncomingMessageBaileysService do
         described_class.new(inbox: inbox, params: params).perform
 
         expect(message.reload.status).to eq('delivered')
+      end
+
+      it 'clears the external_error when a failed message is delivered' do
+        message.update!(status: 'failed', external_error: 'WhatsApp error 479')
+
+        described_class.new(inbox: inbox, params: params).perform
+
+        expect(message.reload.status).to eq('delivered')
+        expect(message.external_error).to be_nil
       end
 
       it 'does not downgrade a read message on receiptTimestamp' do

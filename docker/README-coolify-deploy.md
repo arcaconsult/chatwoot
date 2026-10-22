@@ -55,11 +55,17 @@ Web e worker carregam o mesmo conjunto, com `SIDEKIQ_CONCURRENCY` só no worker.
 
 **`INTERNAL_HOST_URL`** é o endereço pelo qual um provedor **busca** o arquivo de um anexo. Texto e reação viajam inteiros no comando; anexo não, porque isso colocaria um vídeo de 60 MB dentro do processo Rails e dentro do frame do comando. O `AttachmentAdapter` troca o host do `download_url` por este valor. Se ele não resolver do lado de quem busca, **só o envio de anexo quebra**, com `could not fetch the file to send`, e todo o resto segue funcionando. Em application, o valor é o alias: `http://chatwoot:3000`.
 
-**`WHATSAPP_CONNECTOR_EVENT_SHARDS`** não é opcional quando `WHATSAPP_CONNECTOR_ENABLED=true`: o `config/database.yml` **soma** esse número ao pool de todo processo. O valor tem que bater com o `WAC_EVENT_SHARDS` do conector, senão o consumo abre mais threads do que o pool comporta.
+**`WHATSAPP_CONNECTOR_EVENT_SHARDS`** não é opcional com o conector ligado, que é o padrão: o `config/database.yml` **soma** esse número ao pool de todo processo. O valor tem que bater com o `WAC_EVENT_SHARDS` do conector, senão o consumo abre mais threads do que o pool comporta.
 
 ## O conector WhatsApp
 
-Roda como application separada, com imagem e trem de release próprios, porque o whatsmeow muda a cada duas semanas e um hotfix de protocolo não pode esperar um trem de release do Rails.
+O canal WhatsApp (nativo) vem ligado em toda instalação e toda conta; `WHATSAPP_CONNECTOR_ENABLED=false` desliga a integração inteira, e `whatsapp_native_disabled` nos settings de uma conta (pelo console) tira o provedor só dela. Por padrão o conector roda **dentro do worker**: a imagem traz o binário numa versão fixa e o `sidekiq.sh` sobe o conector ao lado do Sidekiq, com banco próprio no mesmo PostgreSQL (criado no primeiro start), diretório de mídia local do container e token de mídia gerado no start. Nesse modo não existe a application `whatsapp-connector`. Detalhes e um compose de exemplo de cada modo em [docs/deployment.md](https://github.com/fazer-ai/whatsapp-connector/blob/main/docs/deployment.md) do repositório do conector.
+
+**Instalação que já roda o conector como application separada põe `WHATSAPP_CONNECTOR_EMBEDDED=false` no worker antes de atualizar a imagem, mesmo que nunca tenha definido `WHATSAPP_CONNECTOR_ENABLED`.** Sem isso sobe um segundo conector dentro do worker, com um banco sem os pareamentos, disputando as mesmas sessões pelo mesmo Redis.
+
+**Chamadas de WhatsApp na caixa nativa precisam de uma porta UDP.** A voz das ligações passa pelo conector numa porta UDP só, e o navegador dos agentes manda o áudio direto para ela. Defina `WAC_CALLS_UDP_PORT` (por exemplo `40000`) no container onde o conector roda (o worker, no modo embutido; a application `whatsapp-connector`, no modo separado) e publique essa porta em UDP no container, com o firewall do servidor liberando a mesma porta. Atrás de NAT, defina também `WAC_CALLS_PUBLIC_IP` com o IPv4 público do servidor. Sem a porta, as chamadas ficam desligadas, e a tela de chamadas da caixa diz o que falta.
+
+Como application separada, o conector tem imagem e trem de release próprios, o que serve para atualizá-lo sem esperar uma release do Chatwoot (o whatsmeow muda a cada duas semanas). O resto desta seção vale para esse modo.
 
 - **`REDIS_URL` e `REDIS_PASSWORD` são sem prefixo `WAC_`, de propósito:** os dois lados leem a mesma variável, então não dá para apontá-los para servidores diferentes. Redis separado produziria silêncio, não erro.
 - **`WAC_ADVERTISE_URL` fica vazia.** O conector deriva o valor do próprio hostname, o que acompanha o container a cada deploy; um valor fixo apontaria para um container que deixou de existir.

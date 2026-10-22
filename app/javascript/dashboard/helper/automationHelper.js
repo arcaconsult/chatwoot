@@ -10,6 +10,7 @@ import {
   OPERATOR_TYPES_3,
   OPERATOR_TYPES_4,
 } from 'dashboard/routes/dashboard/settings/automation/operators';
+import { CAPTAIN_CONDITION } from 'dashboard/routes/dashboard/settings/automation/constants';
 import actionQueryGenerator from './actionQueryGenerator';
 import filterQueryGenerator from './filterQueryGenerator';
 
@@ -107,6 +108,7 @@ const ACTION_ICONS = {
   resolve_conversation: 'i-lucide-circle-check',
   change_priority: 'i-lucide-signal-high',
   add_sla: 'i-lucide-gauge',
+  remove_custom_attribute: 'i-lucide-eraser',
 };
 
 const DEFAULT_ACTION_ICON = 'i-lucide-zap';
@@ -145,11 +147,19 @@ export const generateLabelOptions = labels =>
     color: label.color,
   }));
 
+// The action names the attribute by its key, which is what the conversation stores it under.
+const generateCustomAttributeOptions = (attributes = []) =>
+  attributes.map(attribute => ({
+    id: attribute.attribute_key,
+    name: attribute.attribute_display_name,
+  }));
+
 export const getActionOptions = ({
   agents,
   teams,
   labels,
   slaPolicies,
+  conversationCustomAttributes,
   type,
   addNoneToListFn,
   priorityOptions,
@@ -164,6 +174,9 @@ export const getActionOptions = ({
     remove_label: generateLabelOptions(labels),
     change_priority: priorityOptions,
     add_sla: slaPolicies,
+    remove_custom_attribute: generateCustomAttributeOptions(
+      conversationCustomAttributes
+    ),
   };
   return actionsMap[type];
 };
@@ -240,6 +253,7 @@ export const getFileName = (action, files = []) => {
 };
 
 export const getDefaultConditions = eventName => {
+  if (eventName === 'monitor_matched') return [];
   if (MESSAGE_LEVEL_EVENTS.includes(eventName)) {
     return structuredClone(DEFAULT_MESSAGE_CREATED_CONDITION);
   }
@@ -273,10 +287,34 @@ export const getStandardAttributeInputType = (automationTypes, event, key) => {
 
 export const generateAutomationPayload = payload => {
   const automation = JSON.parse(JSON.stringify(payload));
-  automation.conditions[automation.conditions.length - 1].query_operator = null;
-  automation.conditions = filterQueryGenerator(automation.conditions).payload;
+  if (automation.conditions.length) {
+    automation.conditions[automation.conditions.length - 1].query_operator =
+      null;
+    automation.conditions = filterQueryGenerator(automation.conditions, {
+      useLocalTimezone: false,
+    }).payload;
+  }
   automation.actions = actionQueryGenerator(automation.actions);
   return automation;
+};
+
+/**
+ * Summarise the Captain conditions of a rule payload for usage metrict.
+ * @param {Object} automation - The automation payload (API shape).
+ * @returns {Object|null} Tracking attributes, or null when the rule has no Captain condition.
+ */
+export const getCaptainConditionUsage = automation => {
+  const captainConditions = automation.conditions.filter(
+    condition => condition.attribute_key === CAPTAIN_CONDITION.key
+  );
+  if (!captainConditions.length) return null;
+
+  return {
+    eventName: automation.event_name,
+    captainConditions: captainConditions.length,
+    totalConditions: automation.conditions.length,
+    operators: captainConditions.map(condition => condition.filter_operator),
+  };
 };
 
 export const formatDelay = minutes => {

@@ -131,11 +131,15 @@ module Whatsapp::Session::Model::Commands
     include Serializable
     defaults from_me: false
 
-    # The anchor a stored message stands for.
+    # The anchor a stored message stands for, timed by WhatsApp's own clock when the row has
+    # it: that is the number the phone indexed the message by, while `created_at` on a live
+    # row is when it was filed here.
     def self.for_message(message)
       return if message.blank?
 
-      new(id: message.source_id, timestamp: (message.created_at.to_f * 1000).to_i, from_me: message.outgoing?)
+      sent = message.content_attributes&.dig('external_created_at').presence
+      timestamp = sent ? sent.to_i * 1000 : (message.created_at.to_f * 1000).to_i
+      new(id: message.source_id, timestamp: timestamp, from_me: message.outgoing?)
     end
   end
 
@@ -274,13 +278,34 @@ module Whatsapp::Session::Model::Commands
     coerce from: Address
   end
 
+  # The browser's WebRTC answer to a call the connector offered with an `sdp`, or the media
+  # `stream` ({'url' => 'wss://...'}) a voice agent takes the call over instead.
+  class CallAccept < Data.define(:call_id, :sdp, :stream)
+    include Serializable
+    wire_type 'call.accept'
+  end
+
+  # Rings `to` with the browser's WebRTC offer. An RPC: the result is the call id that
+  # `call.answered` and `call.terminate` carry for it.
+  class CallStart < Data.define(:to, :sdp)
+    include Serializable
+    wire_type 'call.start'
+    coerce to: Address
+  end
+
+  class CallTerminate < Data.define(:call_id)
+    include Serializable
+    wire_type 'call.terminate'
+  end
+
   CLASSES = [
     SessionConnect, SessionDisconnect, SessionLogout, SessionDelete, SessionStatus, SessionUpdate, SessionWake,
     AdminPing, PairingRequestCode, PairingPasskeyResponse, PairingPasskeyConfirm, HistoryRequest, MessageSend, MessageEdit,
     MessageRevoke, MessageReact, MessageMarkRead, MessageMarkUnread, MessageDownloadMedia, PresenceSet,
     PresenceSubscribe, ChatPresence, ContactCheck, ContactProfilePicture, ContactInfo, ContactResolve, GroupCreate,
     GroupInfo, GroupList, GroupLeave, GroupParticipantsUpdate, GroupNameSet, GroupDescriptionSet, GroupPhotoSet,
-    GroupSettingsSet, GroupInviteGet, GroupJoinRequestsList, GroupJoinRequestsUpdate, CallReject
+    GroupSettingsSet, GroupInviteGet, GroupJoinRequestsList, GroupJoinRequestsUpdate, CallReject,
+    CallAccept, CallStart, CallTerminate
   ].freeze
 
   BY_TYPE = CLASSES.index_by(&:wire_type).freeze
@@ -296,6 +321,7 @@ module Whatsapp::Session::Model::Commands
     group.create group.info group.list group.leave group.participants.update group.name.set
     group.description.set group.photo.set group.settings.set group.invite.get
     group.join_requests.list group.join_requests.update
+    call.start
   ].freeze
 
   def self.rpc?(type)

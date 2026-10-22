@@ -50,6 +50,13 @@ module Whatsapp::Session::Errors
 
   class NotPaired < ProviderUnavailable
     CODE = 'not_paired'.freeze
+
+    # A phone that was logged out stays that way until somebody scans the QR again, so no
+    # retry can answer differently. Still a ProviderUnavailable, because the UI says the
+    # same thing about it; only the send stops waiting four attempts to say so (#855).
+    def retryable?
+      false
+    end
   end
 
   class OwnedElsewhere < ProviderUnavailable
@@ -130,6 +137,34 @@ module Whatsapp::Session::Errors
     CODE = 'send_outcome_unknown'.freeze
   end
 
+  # A teardown (`session.delete`, `session.logout`) that ran out of time while the socket
+  # was being dialled: its lock was never free, the unlink was never called, and nothing
+  # reached WhatsApp. The connector is certain of that, which is what sets it apart from
+  # `timeout`, and it is why the same command again is the whole teardown rather than the
+  # half that is left. Whatsapp::Session::TeardownRetry is what acts on it.
+  #
+  # Not under ProviderUnavailable. The provider answered, and precisely: our own socket was
+  # busy. That class carries "the WhatsApp connection is not working right now" to whoever
+  # rescues it, and a teardown refused this way is neither a broken connection nor
+  # anything an operator should be shown.
+  class NotAttempted < Error
+    CODE = 'not_attempted'.freeze
+
+    def retryable?
+      true
+    end
+  end
+
+  # A `group.create` whose outcome WhatsApp has not decided yet: the connector recorded the
+  # attempt and is waiting for the notification that names which request made which group.
+  # The connector backend asks again under the same idempotency key a few times, and this
+  # is what is left once it stops, most likely an intent recorded whose request never
+  # reached WhatsApp. Not retryable from outside: a caller running the creation again would
+  # do it under a fresh key, which is exactly how a second group gets made.
+  class NotSettled < Error
+    CODE = 'not_settled'.freeze
+  end
+
   # Another worker is already handling this provider message id.
   class MessageAlreadyProcessing < Error
     CODE = 'message_already_processing'.freeze
@@ -150,10 +185,21 @@ module Whatsapp::Session::Errors
     ProviderUnavailable, Internal, SessionNotFound, NotConnected, NotPaired, OwnedElsewhere,
     Quarantined, ClientOutdated, Timeout, Expired, Unauthorized, NotSupported, InvalidPayload,
     InvalidConfig, InvalidEvent, RateLimited, MediaTooLarge, MediaUnavailable,
-    RecipientNotOnWhatsapp, GroupParticipantNotAllowed, MessageAlreadyProcessing, EventOutOfOrder
+    RecipientNotOnWhatsapp, GroupParticipantNotAllowed, MessageAlreadyProcessing, EventOutOfOrder,
+    NotAttempted, NotSettled
   ].freeze
 
   BY_CODE = CLASSES.index_by { |klass| klass::CODE }.freeze
+
+  # Codes the contract's error_code enum has and this catalogue deliberately leaves to the
+  # Internal fallback below. Named so that a code nobody decided about fails the catalogue
+  # spec, which reads the vendored enum, instead of degrading in silence.
+  #
+  # - `provider_unavailable`: a dependency the command named (the storage a send points
+  #   its `ref.url` at) did not answer. Internal already is a ProviderUnavailable and
+  #   already retryable, so the fallback treats it exactly as a class of its own would;
+  #   what a class would add is the code on the exception, which nothing reads yet.
+  UNMAPPED_WIRE_CODES = %w[provider_unavailable].freeze
 
   # A newer connector may answer with a code this version does not know yet. Additive
   # evolution is part of the contract, so an unknown code degrades to Internal instead

@@ -76,7 +76,10 @@ class Whatsapp::Session::ConnectionStateWriter
   # the lock, which is the only place they mean anything: a caller that reads the record,
   # then asks the provider, then writes, has left a gap in the middle for a second connect,
   # a conversion or a re-pointing to land in.
-  def apply(state, reset: false, attempt: nil, provider: nil, instance: nil)
+  #
+  # `answering: true` says the state is a connect's own answer, which keeps the code or QR
+  # this attempt was already given: see `keep_issued`.
+  def apply(state, reset: false, attempt: nil, provider: nil, instance: nil, answering: false) # rubocop:disable Metrics/ParameterLists
     written = nil
 
     result = channel.with_lock do
@@ -88,7 +91,7 @@ class Whatsapp::Session::ConnectionStateWriter
       next :stale if refuse?(written, persisted, attempt: attempt, provider: provider, instance: instance)
 
       remember_unlink(state, written)
-      payload = merge(written, persisted)
+      payload = merge(written, persisted, answering: answering)
       next :unchanged if payload == persisted
 
       channel.update_provider_connection!(payload)
@@ -184,7 +187,7 @@ class Whatsapp::Session::ConnectionStateWriter
     configured.present? && paired.present? && !Whatsapp::Session::PhoneMatch.same_number?(configured, paired)
   end
 
-  def merge(state, persisted)
+  def merge(state, persisted, answering: false)
     payload = state.to_h
     # The sentence is what the dashboard renders, and the key is what code compares
     # against: the sentence depends on the locale in force when it was written and on
@@ -197,6 +200,8 @@ class Whatsapp::Session::ConnectionStateWriter
     payload['connection'] ||= persisted['connection']
     payload['epoch'] ||= persisted['epoch']
     carry_pairing(payload, persisted)
+    keep_issued(payload, persisted, answering)
+    carry_rerouting(payload, persisted)
     STICKY_KEYS.each do |key|
       payload[key] = persisted[key] if payload[key].nil? && persisted[key].present?
     end
@@ -221,6 +226,35 @@ class Whatsapp::Session::ConnectionStateWriter
     # is what turns the next one into something somebody finds.
     Rails.logger.warn("[WHATSAPP] no sentence written for provider connection reason #{key.inspect}")
     key.to_s.humanize
+  end
+
+  # A reconnect the connector is making on purpose (a proxy change) arrives as
+  # `reconnecting` with `rerouting`, and then as the `connecting` of its redial, which says
+  # nothing about why. Carried onto that one only: it is still the same reconnect, and
+  # dropped there the conversation shows the banner to link the device again, and the
+  # modal the QR loader, for the second the redial takes on an account that is paired.
+  # Anything else ends it: the session opening or closing, an error, a pairing starting.
+  def carry_rerouting(payload, persisted)
+    return unless persisted['rerouting'] && payload['connection'] == 'connecting'
+    return if payload.values_at('error', 'qr_data_url', 'pairing_code').any?(&:present?)
+
+    payload['rerouting'] = true
+  end
+
+  # A connect's answer can land after the code or QR it led to. The connector answers a
+  # pairing connect only once it has published the code, and that event may already have
+  # been filed while the request was still waiting, so an answer that carries neither,
+  # written as a whole state, cleared what the operator had just been shown (#774). The
+  # claim cleared the record for this attempt before the provider was asked, and the fence
+  # has already refused an answer for any other attempt, so whatever is there was issued
+  # for this one. An answer with something of its own, or that ends the attempt, wins.
+  ISSUED_KEYS = %w[qr_data_url pairing_code].freeze
+
+  def keep_issued(payload, persisted, answering)
+    return unless answering && payload['connection'] == 'connecting'
+    return if payload.values_at('error', *ISSUED_KEYS).any?(&:present?)
+
+    ISSUED_KEYS.each { |key| payload[key] = persisted[key] if persisted[key].present? }
   end
 
   def carry_pairing(payload, persisted)

@@ -37,10 +37,28 @@ RSpec.describe Whatsapp::Session::Registry do
     expect(beta).to contain_exactly('native', 'uazapi')
   end
 
+  # The settings page leaves a secret input empty and never saves an empty one, so a secret
+  # proxy could be set but neither seen nor taken away again.
+  it 'offers the native proxy as a masked field the settings page can clear' do
+    proxy = described_class.descriptor('native').fields.find { |field| field.name == 'proxy_url' }
+
+    expect(proxy).to have_attributes(type: 'password', required: false, secret: false)
+  end
+
   it 'reports a provider as unavailable while its backend class is missing' do
     descriptor = Whatsapp::Session::ProviderDescriptor.new(key: 'uazapi', backend: 'Whatsapp::Session::Backends::NotShippedYet')
 
     expect(descriptor.available?).to be(false)
+  end
+
+  # The connector publishes the phone's history and pages it back on request, so the
+  # native inbox offers both, with the same setting the other history providers show.
+  it 'declares history on native, with the setting that decides the archive' do
+    native = described_class.descriptor('native')
+
+    expect(native.capabilities).to include('history_sync', 'groups', 'media_download', 'calls', 'code_pairing')
+    expect(native.fields.map(&:name)).to include('history_sync')
+    expect(described_class.descriptor('uazapi').capabilities).to include('history_sync')
   end
 
   it 'requires a deployed connector before native can be used' do

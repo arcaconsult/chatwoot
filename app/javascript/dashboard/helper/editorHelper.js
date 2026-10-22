@@ -8,6 +8,7 @@ import {
 } from '@chatwoot/prosemirror-schema';
 import * as Sentry from '@sentry/vue';
 import camelcaseKeys from 'camelcase-keys';
+import { getMessageVariables } from '@chatwoot/utils';
 import { FORMATTING, MARKDOWN_PATTERNS } from 'dashboard/constants/editor';
 import { INBOX_TYPES, TWILIO_CHANNEL_MEDIUM } from 'dashboard/helper/inbox';
 
@@ -487,6 +488,14 @@ export const getAgentVariables = user => ({
 export const getContactVariables = contact =>
   getNameVariables('contact', contact?.name);
 
+// Variables the editor resolves while composing a reply. Matches the backend
+// drops: names are Ruby-capitalized and {{agent.*}} is the sender, not the assignee.
+export const getReplyVariables = ({ conversation, contact, inbox, user }) => ({
+  ...getMessageVariables({ conversation, contact, inbox }),
+  ...getContactVariables(contact),
+  ...getAgentVariables(user),
+});
+
 // Resolves a manually typed {{variable}} to its value on the closing braces.
 // Leaves the placeholder when there's no value, the value is Liquid, or it's a private note.
 export const createVariableInputRule = ({ isPrivate, getVariables }) => {
@@ -501,6 +510,55 @@ export const createVariableInputRule = ({ isPrivate, getVariables }) => {
     }
   );
   return inputRules({ rules: [rule] });
+};
+
+// The variable in the text typed after `{{`: what comes before its closing braces, or before a
+// comma when it was never closed. What follows (braces, punctuation) is not part of it.
+export const variableContent = (typedAfterTrigger = '') =>
+  typedAfterTrigger.split(/[},]/)[0];
+
+// What a picker hands back when it cannot complete its search, turned into the edit that puts it
+// in the document. The suggestion range runs from the trigger to the next space. After `{{` it can
+// hold the variable's closing braces and the punctuation after them (`{{contact.name}},`), which
+// the search never showed; after any other trigger the whole token is what the search showed.
+// - The caret sat past the token's content (past a variable's closing braces): what was typed
+//   there goes on after it.
+// - Otherwise the content becomes what the search held: the content plus what was typed after
+//   it, or, with `replace`, the edited search. Braces typed in a variable's search close it in
+//   place of the document's own, since the picker lets go on the first one and the next goes to
+//   the editor. The caret is left at the end of the content, so typing goes on inside it.
+export const releasedSearchTransaction = (
+  state,
+  range,
+  { text, replace = false } = {},
+  trigger = '{{'
+) => {
+  if (!text) return null;
+  if (!range) return state.tr.insertText(text);
+
+  const isVariable = trigger === '{{';
+  const from = range.from + trigger.length;
+  const typedAfterTrigger = state.doc.textBetween(from, range.to);
+  const contentLength = isVariable
+    ? variableContent(typedAfterTrigger).length
+    : typedAfterTrigger.length;
+  const closingBraces = isVariable
+    ? typedAfterTrigger.slice(contentLength).match(/^}*/)[0].length
+    : 0;
+  const variableEnd = from + contentLength + closingBraces;
+  if (!replace && state.selection.from >= variableEnd) {
+    return state.tr.insertText(text);
+  }
+
+  const content = replace
+    ? text
+    : typedAfterTrigger.slice(0, contentLength) + text;
+  const replacedTo =
+    isVariable && text.includes('}') ? variableEnd : from + contentLength;
+  const transaction = state.tr.insertText(content, from, replacedTo);
+  return transaction.setSelection(
+    Selection.near(transaction.doc.resolve(from + content.length))
+  );
 };
 
 /**

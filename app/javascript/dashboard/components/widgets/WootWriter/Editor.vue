@@ -66,10 +66,12 @@ import {
   getEffectiveChannelType,
   stripUnsupportedFormatting,
   createVariableInputRule,
+  releasedSearchTransaction,
 } from 'dashboard/helper/editorHelper';
 import {
   hasPressedEnterAndNotCmdOrShift,
   hasPressedCommandAndEnter,
+  isComposing,
   isEscape,
 } from 'shared/helpers/KeyboardHelpers';
 import { createTypingIndicator } from '@chatwoot/utils';
@@ -87,6 +89,8 @@ const props = defineProps({
   overrideLineBreaks: { type: Boolean, default: false },
   updateSelectionWith: { type: String, default: '' },
   enableVariables: { type: Boolean, default: false },
+  // Offers the variables only an automation rule can render (`conversation.before.*`).
+  enableAutomationVariables: { type: Boolean, default: false },
   enableCannedResponses: { type: Boolean, default: true },
   enableCaptainTools: { type: Boolean, default: false },
   enableMacros: { type: Boolean, default: false },
@@ -192,6 +196,7 @@ const createState = (content, placeholder, plugins = [], methods = {}) => {
       methods,
       plugins,
       enabledMenuOptions: editorMenuOptions.value,
+      resizableTableColumns: false,
     }),
   });
 };
@@ -308,6 +313,22 @@ const dismissPicker = showMenu => {
 const dismissUserMentions = () => dismissPicker(showUserMentions);
 const dismissCannedResponses = () => dismissPicker(showCannedMenu);
 const dismissVariables = () => dismissPicker(showVariables);
+
+// A picker gave up on its search: what was typed in it belongs in the editor, after the trigger
+// that opened it.
+const releasePickerSearch = (showMenu, trigger) => released => {
+  showMenu.value = false;
+  const transaction =
+    editorView &&
+    releasedSearchTransaction(editorView.state, range.value, released, trigger);
+  if (transaction) editorView.dispatch(transaction);
+  editorView?.focus();
+};
+const releaseUserMentions = releasePickerSearch(showUserMentions, '@');
+const releaseCannedResponses = releasePickerSearch(showCannedMenu, '/');
+const releaseVariables = releasePickerSearch(showVariables, '{{');
+const releaseMacros = releasePickerSearch(showMacroMenu, '#');
+const releaseEmojiMenu = releasePickerSearch(showEmojiMenu, ':');
 const dismissEmojiMenu = () => dismissPicker(showEmojiMenu);
 const dismissMacros = () => dismissPicker(showMacroMenu);
 
@@ -805,6 +826,7 @@ function handleLineBreakWhenCmdAndEnterToSendEnabled(event) {
 }
 
 function onKeydown(event) {
+  if (isComposing(event)) return false;
   if (isEscape(event)) {
     collapseSelection(editorView);
     return true;
@@ -895,6 +917,10 @@ watch(
   }
 );
 
+watch(effectiveChannelType, () => {
+  reloadState(props.modelValue);
+});
+
 watch(
   computed(() => props.disabled),
   () => editorView?.setProps({})
@@ -984,6 +1010,7 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
       :search-key="mentionSearchKey"
       :exclude-user-id="enableMentionDropdown ? currentUser?.id : null"
       @close="dismissUserMentions"
+      @release="releaseUserMentions"
       @remove-trigger="removeSuggestionTrigger"
       @select-agent="content => insertSpecialContent('mention', content)"
     />
@@ -994,6 +1021,7 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
       :variables="variables"
       :schema="editorSchema"
       @close="dismissCannedResponses"
+      @release="releaseCannedResponses"
       @remove-trigger="removeSuggestionTrigger"
       @replace="content => insertSpecialContent('cannedResponse', content)"
     />
@@ -1002,7 +1030,9 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
       :caret-position="caretPosition"
       :search-key="variableSearchKey"
       :variables="variables"
+      :automation="enableAutomationVariables"
       @close="dismissVariables"
+      @release="releaseVariables"
       @remove-trigger="removeSuggestionTrigger"
       @select-variable="content => insertSpecialContent('variable', content)"
     />
@@ -1011,6 +1041,7 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
       :caret-position="caretPosition"
       :search-key="macroSearchKey"
       @close="dismissMacros"
+      @release="releaseMacros"
       @remove-trigger="removeSuggestionTrigger"
       @select-macro="onSelectMacro"
     />
@@ -1019,6 +1050,7 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
       :caret-position="caretPosition"
       :search-key="emojiSearchKey"
       @close="dismissEmojiMenu"
+      @release="releaseEmojiMenu"
       @remove-trigger="removeSuggestionTrigger"
       @select-emoji="emoji => insertSpecialContent('emoji', emoji)"
     />
@@ -1065,7 +1097,7 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
         {{ signatureSeparator }}
       </div>
     </div>
-    <div ref="editor" />
+    <div ref="editor" class="editor-mount" />
     <!-- Signature preview at bottom -->
     <div
       v-if="shouldShowSignaturePreview && signaturePosition === 'bottom'"
@@ -1181,6 +1213,12 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
   }
 }
 
+// Room for the table grips and add buttons, which sit outside the table.
+// .editor-mount keeps this off the article editor.
+.editor-mount .ProseMirror .tableWrapper {
+  @apply m-0 pt-4 pb-5 ps-5 pe-6;
+}
+
 .ProseMirror-woot-style {
   @apply overflow-auto;
 }
@@ -1277,7 +1315,7 @@ defineExpose({ focusEditorInputField, insertMentionTrigger });
 .popover-prosemirror-menu {
   position: relative;
 
-  .ProseMirror p:last-child {
+  .ProseMirror p:last-child:not(:is(th, td) > p) {
     margin-bottom: 10px !important;
   }
 

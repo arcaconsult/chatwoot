@@ -95,7 +95,20 @@
       "ERROR": "No se pudieron pedir los mensajes más antiguos. Inténtalo de nuevo en un momento.",
       "EXHAUSTED": "No hay nada más antiguo aquí. El resto de esta conversación está solo en el teléfono."
     },
-    "FILE_IS_EMPTY": "Este archivo está vacío y no se puede enviar"
+    "FILE_IS_EMPTY": "Este archivo está vacío y no se puede enviar",
+    "PICKER": {
+      "VARIABLE": {
+        "AUTOMATION": {
+          "ASSIGNEE_NAME": "Nombre del agente asignado a la conversación",
+          "BEFORE_ASSIGNEE_NAME": "Agente asignado a la conversación antes de que la regla se ejecutara",
+          "BEFORE_ATTRIBUTE": "{name} antes de que la regla se ejecutara"
+        }
+      }
+    },
+    "HEADER": {
+      "WHATSAPP_CALL_GROUP_UNSUPPORTED": "No se puede llamar a un grupo por WhatsApp"
+    },
+    "WHATSAPP_NUMBER_MISSING_BANNER": "Este número no tenía WhatsApp cuando se verificó el {date}. Los mensajes enviados a él no se entregan."
   },
   "CONVERSATION_SIDEBAR": {
     "ACCORDION": {

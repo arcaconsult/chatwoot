@@ -11,6 +11,7 @@ module Whatsapp::Session::ChannelExtension # rubocop:disable Metrics/ModuleLengt
   def self.prepended(base)
     base.validate :validate_provider_eligible
     base.after_update_commit :handle_provider_config_change, if: :saved_change_to_provider_config?
+    base.before_save :turn_calling_off_through_proxy, if: :session_provider?
     # Prepended so it runs before the model's own teardown callback. It is the only thing
     # that tells the destroy path apart from an explicit disconnect, which reaches the
     # same method through the inboxes controller.
@@ -46,6 +47,48 @@ module Whatsapp::Session::ChannelExtension # rubocop:disable Metrics/ModuleLengt
     Whatsapp::Session::Registry.backend_for(self)
   end
 
+  # A session provider calls through the connector rather than Meta's Calling API, so
+  # whether it can is its capability, and turning it on or off is the flag alone: the
+  # connect that follows the save is what tells the connector.
+  def voice_calling_supported?
+    return super unless session_provider?
+
+    session_capabilities.include?('voice_calls')
+  end
+
+  # Not turned on through a proxy: a call's voice travels to WhatsApp over UDP, which the
+  # proxy does not carry, and the connector answers every call command on a proxied session
+  # as unsupported. Turning it off stays possible whatever the inbox goes out through.
+  def enable_voice_calling!
+    return super unless session_provider?
+    raise I18n.t('errors.whatsapp.calls.provider_unsupported') unless voice_calling_supported?
+    raise I18n.t('errors.whatsapp.calls.proxy_unsupported') if provider_config.to_h['proxy_url'].present?
+    raise I18n.t('errors.whatsapp.calls.connector_without_calls') unless voice_calls_carried?
+    raise I18n.t('errors.whatsapp.calls.channel_voice_required') unless account.feature_enabled?('channel_voice')
+
+    update_calling_flag(true)
+  end
+
+  # Whether the connector this inbox talks to carries the voice of calls, which takes a
+  # UDP port the deployment opens (WAC_CALLS_UDP_PORT). Asked of the registry the
+  # connector announces, so it follows a port opened or closed by a redeploy. A Cloud
+  # inbox calls through Meta and has no port to miss, so it is never asked.
+  def voice_calls_carried?
+    return true unless session_provider?
+    return false unless voice_calling_supported?
+
+    Whatsapp::Connector::Client.carries_calls?
+  rescue Whatsapp::Session::Errors::ProviderUnavailable
+    false
+  end
+
+  def disable_voice_calling!
+    return super unless session_provider?
+    raise I18n.t('errors.whatsapp.calls.provider_unsupported') unless voice_calling_supported?
+
+    update_calling_flag(false)
+  end
+
   # Not a delegate on the model, unlike `setup_channel_provider`: pairing by code is a
   # session-family action, and the legacy services have nothing to answer it with.
   def request_pairing_code
@@ -71,10 +114,10 @@ module Whatsapp::Session::ChannelExtension # rubocop:disable Metrics/ModuleLengt
     return super unless session_provider?
 
     unless @session_teardown
-      # The same teardown `super` performs, minus its logging branch. Not
-      # `backend.disconnect`: the facade deletes the session, and only disconnecting
-      # leaves the pairing alive under a session id Chatwoot is about to stop using.
-      provider_service.disconnect_channel_provider
+      # A logout, not the teardown: the inbox stays, and the session id with it (see
+      # Facade#logout_channel_provider). Not `backend.disconnect` either, which would leave
+      # the device linked on the phone.
+      provider_service.logout_channel_provider
       return session_backend.release_registration
     end
 
@@ -153,7 +196,33 @@ module Whatsapp::Session::ChannelExtension # rubocop:disable Metrics/ModuleLengt
     data.merge(connection.slice('pairing_code', 'quarantine', 'ban').compact_blank.symbolize_keys)
   end
 
+  # Up, or down but still paired: a session the connector will bring back by itself, and so
+  # one that has to hear about a new proxy before it does. `connecting` alone does not
+  # count: that is also a QR pairing in progress, which a resume would only interrupt.
+  def resumable_session?
+    connection = provider_connection.to_h
+    connection['connection'] == 'open' ||
+      Whatsapp::Session::ConnectionStateWriter::PAIRING_KEYS.any? { |key| connection[key].present? }
+  end
+
+  # Called once a pairing succeeds: a call policy changed while it was under way goes out.
+  # Let go of only once the job is on its way, so a pairing event redelivered after the
+  # enqueue failed still finds it.
+  def apply_pending_call_policy
+    return unless Redis::Alfred.exists?(call_policy_pending_key)
+
+    Whatsapp::Session::ApplyProxyJob.perform_later(id)
+    Redis::Alfred.delete(call_policy_pending_key)
+  end
+
   private
+
+  # Saved without validation, like the Cloud path: the flag is not something the provider's
+  # credentials check has anything to say about.
+  def update_calling_flag(enabled)
+    self.provider_config = provider_config.merge('calling_enabled' => enabled)
+    save!(validate: false)
+  end
 
   # Two things a session inbox's config can change that the provider has to be told about,
   # and neither of them changes the provider key, so nothing else in the layer notices.
@@ -170,10 +239,61 @@ module Whatsapp::Session::ChannelExtension # rubocop:disable Metrics/ModuleLengt
     previous = self.class.find(id)
     previous.provider_config = saved_change_to_provider_config.first || {}
     let_go_of(previous) if moved_instance?(previous)
+    follow_connect_request_change
   rescue Whatsapp::Session::Errors::Error => e
     # This runs after the commit, so raising would answer a save that already succeeded
     # with a 500, and neither half of this is something the save depended on.
     Rails.logger.warn("[WHATSAPP SESSION] provider config change on inbox ##{inbox&.id} left the provider behind: #{e.message}")
+  end
+
+  # The connector holds the proxy it was last given until a connect names another, and it
+  # resumes a dropped session through that same proxy. So a change goes out while the
+  # session is up, and also while it is down but still paired, which is the likeliest time
+  # to change it: the proxy failed and took the session with it. A pairing that ended (a
+  # logout, a wrong number) or never happened has nothing to resume, and gets the proxy
+  # with its next connect, which is the operator's to ask for.
+  #
+  # The connect goes through a job because the save has already committed: a connector that
+  # cannot be reached right now would otherwise leave it on the old proxy for good, since
+  # saving the same address again changes nothing and sends nothing.
+  #
+  # Calling being turned on or off is the same kind of change: the call policy rides on the
+  # connect too, and the connector keeps the last one it was given. A pairing under way
+  # was connected with the policy from before, and nothing connects it again once paired,
+  # so the change is kept for the pairing to apply when it succeeds.
+  def follow_connect_request_change
+    return unless proxy_changed? || calling_changed?
+    return Whatsapp::Session::ApplyProxyJob.perform_later(id) if resumable_session?
+
+    Redis::Alfred.setex(call_policy_pending_key, 1, CALL_POLICY_PENDING_TTL) if calling_changed?
+  end
+
+  # Long enough for any pairing started before the change to end, one way or the other.
+  CALL_POLICY_PENDING_TTL = 1.hour.to_i
+
+  def call_policy_pending_key
+    format(Redis::Alfred::WHATSAPP_CONNECTOR_CALL_POLICY_PENDING, channel_id: id)
+  end
+
+  # A proxy saved on an inbox with calling on turns calling off in the same save, for the
+  # reason enable_voice_calling! refuses the pair: an inbox that reads as calling and can
+  # neither place nor answer a call is worse than one that says it is off. The settings
+  # page says so next to the proxy before it is saved.
+  def turn_calling_off_through_proxy
+    config = provider_config.to_h
+    return unless config['proxy_url'].present? && config['calling_enabled'].present?
+
+    self.provider_config = config.merge('calling_enabled' => false)
+  end
+
+  def proxy_changed?
+    before, after = saved_change_to_provider_config
+    before.to_h['proxy_url'].presence != after.to_h['proxy_url'].presence
+  end
+
+  def calling_changed?
+    before, after = saved_change_to_provider_config
+    before.to_h['calling_enabled'].present? != after.to_h['calling_enabled'].present?
   end
 
   # False for every save that did not touch the credentials, and for a backend with no
@@ -249,7 +369,11 @@ module Whatsapp::Session::ChannelExtension # rubocop:disable Metrics/ModuleLengt
     return super unless session_provider?
 
     provider_config['webhook_verify_token'] = kept('webhook_verify_token') { SecureRandom.hex(16) }
-    provider_config['session_id'] = kept('session_id') { SecureRandom.uuid }
+    # A new one when the provider changes. Leaving the provider tears the session down, and
+    # the connector forgets a deleted session, epoch counter included: back on native under
+    # the old id, the new pairing would start at epoch 1 under the epoch and position kept for
+    # the old one, and be dropped (fazer-ai/chatwoot#852).
+    provider_config['session_id'] = provider_changed? ? SecureRandom.uuid : kept('session_id') { SecureRandom.uuid }
   end
 
   # Written from the stored value rather than from whatever came in, because

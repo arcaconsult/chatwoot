@@ -14,7 +14,10 @@ class Whatsapp::Session::Inbound::Handlers::ConnectionState < Whatsapp::Session:
     # previous instance's state, down to the number it was paired with, which reads as the
     # wrong one and ends the session that just replaced it.
     result = Whatsapp::Session::ConnectionStateWriter.new(channel).apply(state, instance: instance)
-    result == :stale ? :ignored : :handled
+    return :ignored if result == :stale
+
+    channel.apply_pending_call_policy if payload.wire_type == 'pairing.success'
+    :handled
   end
 
   private
@@ -39,6 +42,13 @@ class Whatsapp::Session::Inbound::Handlers::ConnectionState < Whatsapp::Session:
   # person looking at the screen is the one who knows. Reported, it reads as a failure of
   # the connection, and the operator goes looking for one.
   PAIRING_EXPIRED = %w[timeout pairing_timeout].freeze
+
+  # The connector took the socket down to dial again through the proxy the operator just
+  # saved, and it comes back within the same connect. A reconnect, not a failure: written
+  # with a sentence, the modal shows it in red next to the button to pair the phone again.
+  # Written as `rerouting` instead, which the agent's view also receives: the error string
+  # is admin-only, so its absence cannot be what tells a deliberate reconnect apart.
+  PROXY_CHANGED = 'proxy_changed'.freeze
 
   # A logout this installation asked for, told apart from an unlink done on the phone.
   # The connector already separates them and says which, and both arrive as
@@ -91,8 +101,9 @@ class Whatsapp::Session::Inbound::Handlers::ConnectionState < Whatsapp::Session:
   # the wrong number, or that names none while the inbox is quarantined, because the poll
   # and the connect answer write states without ever passing through a handler.
   def session_state
-    reason = payload.reason.to_s.in?(PAIRING_EXPIRED) ? nil : payload.reason
-    state(payload.state, error: reason, phone_number: payload.phone, lid: payload.lid,
+    rerouting = payload.reason.to_s == PROXY_CHANGED
+    reason = payload.reason.to_s.in?(PAIRING_EXPIRED) || rerouting ? nil : payload.reason
+    state(payload.state, error: reason, rerouting: rerouting || nil, phone_number: payload.phone, lid: payload.lid,
                          quarantine: payload.quarantine, ban: payload.ban)
   end
 

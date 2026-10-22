@@ -12,6 +12,8 @@ en:
     messages:
       deleted: This message was deleted
   errors:
+    articles:
+      invalid_sort: Unknown article order. Use updated_at, created_at, title or views, prefixed with - for descending.
     request:
       unexpected: The request could not be completed.
     account:
@@ -39,6 +41,12 @@ en:
       messaging_window_closed: Meta's reply window for this contact has closed. It reopens when the contact sends a new message.
       messaging_window_closed_for_automation: Meta only accepts automated replies within 24 hours of the contact's last message. Take over the conversation to reply as an agent.
     whatsapp:
+      calls:
+        group_not_supported: Calls cannot be placed to a group
+        proxy_unsupported: 'WhatsApp calls do not go through a proxy. Remove the proxy from this inbox to turn calls on.'
+        connector_without_calls: 'The WhatsApp connector of this installation does not carry call voice: it needs WAC_CALLS_UDP_PORT set and that port published over UDP.'
+        provider_unsupported: 'This WhatsApp provider does not support calls.'
+        channel_voice_required: 'Calls are not available on this account''s plan.'
       group_announcement_only: Only administrators are allowed to send messages in this group
       group_description_cannot_be_removed: WhatsApp does not allow a group description to be removed once it is set. Replace the text instead.
     inboxes:
@@ -85,6 +93,7 @@ en:
           connect_failed: The connector could not reach WhatsApp. Retries continue automatically.
           disconnect_requested: 'This connection was closed here. The pairing is still valid: connect again to resume it.'
           disconnected: The connection to WhatsApp dropped. Retries continue automatically.
+          proxy_unreachable: The WhatsApp connection is not getting through this inbox's proxy. Check the proxy address in the inbox settings, or remove it to connect directly. New attempts continue automatically.
   notifications:
     notification_title:
       internal_chat_mention: You have been mentioned in %{name}
@@ -130,6 +139,9 @@ en:
       recurring_message_completed: Recurring scheduled message series completed after %{count} occurrences.
       recurring_message_cancelled: Recurring scheduled message has been stopped by %{agent}.
       unknown_agent: Unknown
+      assignee:
+        removed_not_in_conversation_team: "Conversation unassigned from %{assignee_name} because they are not a member of the conversation's team %{team_name}"
+        handed_to_agent_bot_on_reopen: "Conversation handed from %{assignee_name} to %{bot_name} because the customer wrote again"
   contacts:
     group:
       inbox_id_required: This group is in more than one inbox. Say which one the action is for by sending inbox_id.
@@ -165,3 +177,12 @@ en:
         fourth: fourth
         fifth: fifth
         last: last
+  reports:
+    agent_csv:
+      handled_count: Handled conversations
+    team_csv:
+      handled_count: Handled conversations
+    inbox_csv:
+      handled_count: Handled conversations
+      avg_customer_waiting_time: Avg customer waiting time
+      resolution_count: Resolution Count

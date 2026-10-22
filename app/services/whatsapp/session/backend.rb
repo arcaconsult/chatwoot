@@ -33,12 +33,35 @@ class Whatsapp::Session::Backend
       false
     end
 
+    # Whether an inbound message's media is downloaded before the message is stored, so the
+    # `message_created` it raises already carries the file. Only for a backend whose events
+    # run in a job of their own: the connector's consumer thread keeps a session's events in
+    # order, and a download there would hold every event behind it.
+    def inline_media?
+      false
+    end
+
     # Whether `logout` ends the pairing or only the connection. A provider that cannot
     # unpair keeps the account's credentials whatever it is asked, so connecting again
     # resumes the very session that was just refused: what that decides is whether
     # re-pairing is a way out of a wrong-number quarantine, which for most of this layer
     # is the only exit an operator has.
     def unpairs?
+      false
+    end
+
+    # Whether every connect asks for the phone's history, whatever the inbox setting says.
+    # A provider that publishes what arrived while the session was down only as part of the
+    # history dump needs the dump on every connect, or that part is lost with the rest;
+    # the setting then decides only whether the archive it also carries is filed.
+    def history_on_every_connect?
+      false
+    end
+
+    # Whether a history request has to name a message to page back from. WhatsApp itself
+    # only walks backwards from a message it is shown; a provider that asks it directly
+    # answers a request with no anchor `unsupported`, so the anchor is found here instead.
+    def history_needs_anchor?
       false
     end
 
@@ -122,8 +145,10 @@ class Whatsapp::Session::Backend
   def subscribe_presence(_command) = not_supported!(:subscribe_presence)
 
   # --- contacts --------------------------------------------------------------------
-  def check_numbers(_command) = not_supported!(:check_numbers)
+  def check_numbers(_command, **) = not_supported!(:check_numbers)
   def profile_picture_url(_command) = not_supported!(:profile_picture_url)
+  # Both of WhatsApp's namespaces for one person, as a Party.
+  def resolve_contact(_command, **) = not_supported!(:resolve_contact)
 
   # --- groups ----------------------------------------------------------------------
   def create_group(_command) = not_supported!(:create_group)
@@ -141,6 +166,12 @@ class Whatsapp::Session::Backend
   def group_invite_code(_command) = not_supported!(:group_invite_code)
   def group_join_requests(_command) = not_supported!(:group_join_requests)
   def handle_group_join_requests(_command) = not_supported!(:handle_group_join_requests)
+
+  # Calls carried to the agent's browser. `start_call` answers the provider's call id.
+  def accept_call(_command) = not_supported!(:accept_call)
+  def reject_call(_command) = not_supported!(:reject_call)
+  def start_call(_command, **) = not_supported!(:start_call)
+  def terminate_call(_command) = not_supported!(:terminate_call)
 
   def capabilities
     self.class.capabilities

@@ -57,6 +57,56 @@ RSpec.describe Whatsapp::Connector::Consumer::ShardWorker, :redis_streams do
     expect(inbox.messages).to be_empty
   end
 
+  describe 'a teardown that failed for a session no inbox holds' do
+    # What delete_session leaves behind: the inbox is gone by the time the connector answers,
+    # so the answer names a session nobody here holds any more.
+    let(:orphan) { 'a-session-whose-inbox-was-destroyed' }
+    let(:failure) do
+      frame.merge(
+        'type' => 'command.failed', 'sid' => orphan,
+        'payload' => { command_id: 'cmd-1', command_type: 'session.delete', message_id: nil,
+                       error: { code: code, message: 'socket busy dialling' } }.to_json
+      )
+    end
+
+    after { Redis::Alfred.delete(Whatsapp::Session::TeardownRetry.attempts_key(orphan, 'session.delete')) }
+
+    context 'when the connector never attempted it' do
+      let(:code) { 'not_attempted' }
+
+      it 'sends it again rather than dropping it with the rest of the orphans' do
+        redis.xadd(stream, failure)
+
+        expect(worker.poll).to eq(1)
+
+        expect(Whatsapp::Session::TeardownRetryJob).to have_been_enqueued.with(orphan, 'session.delete')
+        expect(redis.xpending(stream, described_class::Consumer::GROUP)['size']).to eq(0)
+      end
+
+      # The cursor is what makes a redelivery harmless for an inbox, and a session with no
+      # inbox needs the same guard or every replay schedules another teardown.
+      it 'sends it again once for a redelivery of the same event' do
+        2.times { redis.xadd(stream, failure) }
+
+        expect(worker.poll).to eq(2)
+
+        expect(Whatsapp::Session::TeardownRetryJob).to have_been_enqueued.once
+      end
+    end
+
+    context 'when it failed for any other reason' do
+      let(:code) { 'invalid_payload' }
+
+      it 'drops it as before' do
+        redis.xadd(stream, failure)
+
+        expect(worker.poll).to eq(1)
+
+        expect(Whatsapp::Session::TeardownRetryJob).not_to have_been_enqueued
+      end
+    end
+  end
+
   it 'drops a redelivery it has already processed' do
     redis.xadd(stream, frame)
     worker.poll
@@ -67,6 +117,20 @@ RSpec.describe Whatsapp::Connector::Consumer::ShardWorker, :redis_streams do
 
     # The cursor, not the message row, is what makes this a no-op.
     expect(inbox.messages).to be_empty
+  end
+
+  # The drop is right for a redelivery and wrong for a session whose counter started over,
+  # and from here the two look the same: the line is what lets anybody tell, since nothing
+  # else in the inbox or the log changes (fazer-ai/chatwoot#852).
+  it 'says so in the log when it drops an event behind the position of its session' do
+    redis.set("#{prefix}cursor:#{session_id}", '1:271')
+    allow(Rails.logger).to receive(:warn)
+
+    redis.xadd(stream, frame)
+    worker.poll
+
+    expect(inbox.messages).to be_empty
+    expect(Rails.logger).to have_received(:warn).with(/#{session_id}.*1:1.*1:271/)
   end
 
   it 'still processes an event from a newer epoch' do
@@ -137,6 +201,42 @@ RSpec.describe Whatsapp::Connector::Consumer::ShardWorker, :redis_streams do
 
     expect(attempts).to eq(3)
     expect(inbox.messages.pluck(:source_id)).to eq(['3EB0AAAA0001'])
+  end
+
+  # A history import leases the chat for IMPORT_CHAT_LOCK_TTL, and a worker killed in the
+  # middle of one never gives it back: the live message behind it has to wait the lease
+  # out rather than be parked with the lock about to come free. The waits are zeroed to
+  # run the ladder, so what is measured is that every rung is climbed before parking and
+  # that the rungs add up past the lease.
+  it 'outlasts the lease a dead history import leaves on the chat' do
+    ladder = described_class::BUSY_WAITS
+    expect(ladder.sum).to be > Whatsapp::Session::Inbound::Locks::IMPORT_CHAT_LOCK_TTL.to_i
+
+    stub_const("#{described_class}::RETRY_WAITS", [])
+    stub_const("#{described_class}::BUSY_WAITS", Array.new(ladder.size, 0))
+    attempts = 0
+    allow(Whatsapp::Session::Inbound::Dispatcher).to receive(:dispatch).and_wrap_original do |original, *args|
+      attempts += 1
+      raise Whatsapp::Session::Inbound::Locks::Busy, 'an import holds it' if attempts <= ladder.size
+
+      original.call(*args)
+    end
+    redis.xadd(stream, frame)
+
+    expect(worker.poll).to eq(1)
+
+    expect(redis.llen("#{prefix}dlq:events")).to eq(0)
+    expect(inbox.messages.pluck(:source_id)).to eq(['3EB0AAAA0001'])
+  end
+
+  # A history slice is filed by a job, so an edit that follows it on the stream can find
+  # its target still waiting in the import queue.
+  it 'hands an event about a message not stored yet to a retry, and moves on' do
+    allow(Whatsapp::Session::Inbound::Dispatcher).to receive(:dispatch).and_return(:deferred)
+    redis.xadd(stream, frame)
+
+    expect { expect(worker.poll).to eq(1) }.to have_enqueued_job(Whatsapp::Session::DeferredEventJob)
+      .with(channel, hash_including('type' => 'message.received'))
   end
 
   it 'leaves an entry pending when it is stopped mid-retry' do

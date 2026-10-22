@@ -60,6 +60,30 @@ RSpec.describe ConversationReplyMailer do
         expect(mail.subject).to eq('Re: Mail Subject')
       end
 
+      it 'sends a long subject whole, so the thread is not split' do
+        # A subject the conversation is allowed to hold goes out verbatim. Cutting it here would
+        # change the normalized subject that Gmail and Outlook thread on, and would also send a
+        # different base subject on the first message than on the replies, because the `Re: `
+        # prefix eats into any budget applied to the finished header.
+        long_subject = (['palavra'] * 400).join(' ')
+        conversation.additional_attributes = { 'mail_subject': long_subject }
+        conversation.save!
+        new_message.save!
+
+        expect(mail.subject).to eq("Re: #{long_subject}")
+      end
+
+      it 'folds a long subject inside the RFC 5322 line limit' do
+        # Length is a line problem, not a subject problem: Mail folds an unstructured header at
+        # whitespace, so prose of any length stays inside 998 octets per physical line.
+        conversation.additional_attributes = { 'mail_subject': (['palavra'] * 400).join(' ') }
+        conversation.save!
+        new_message.save!
+
+        longest_line = mail.to_s.lines.map { |line| line.chomp.bytesize }.max
+        expect(longest_line).to be <= 998
+      end
+
       it 'not have private notes' do
         # make the message private
         private_message.private = true
@@ -100,6 +124,16 @@ RSpec.describe ConversationReplyMailer do
             expect(mail.body.decoded).not_to include 'to rate the conversation'
           end
         end
+      end
+
+      it 'renders the greeting and sender labels' do
+        create(:message, message_type: 'outgoing', account: account, conversation: conversation, sender: agent)
+
+        body = mail.body.decoded
+        expect(body).to include("Hi #{conversation.contact.name},")
+        expect(body).to include('You have new messages on your conversation.')
+        expect(body).to include('<b>You</b>')
+        expect(body).to include("<b>#{agent.available_name}</b>")
       end
     end
 
@@ -562,6 +596,74 @@ RSpec.describe ConversationReplyMailer do
         end
       end
 
+      context 'when the conversation has a subject' do
+        before do
+          conversation.update!(additional_attributes: { 'mail_subject': 'Mail Subject' })
+          create(:message, conversation: conversation, account: account, message_type: 'incoming',
+                           content_attributes: { email: { subject: 'Mail Subject' } })
+        end
+
+        it 'replies with the conversation subject when the message has no subject' do
+          expect(mail.subject).to eq 'Re: Mail Subject'
+        end
+
+        it 'uses the subject of the message as is when it has one' do
+          message.update!(content_attributes: { email: { subject: 'Refund approved' } })
+
+          expect(mail.subject).to eq 'Refund approved'
+        end
+      end
+
+      context 'when forwarding an email' do
+        let(:forwarded_message) do
+          create(:message, conversation: conversation, account: account, message_type: 'incoming',
+                           content_attributes: { email: { message_id: 'original@example.com' } })
+        end
+        let(:forward) do
+          create(:message, conversation: conversation, account: account, message_type: 'outgoing', content: 'Forwarding this',
+                           content_attributes: { forwarded_message_id: forwarded_message.id, to_emails: ['vendor@example.com'] })
+        end
+        let(:mail) { described_class.email_reply(forward).deliver_now }
+
+        before do
+          conversation.additional_attributes = { 'mail_subject': 'Mail Subject' }
+          conversation.save!
+        end
+
+        it 'sends to the forward recipients with a forward subject and no threading headers' do
+          expect(mail.to).to eq ['vendor@example.com']
+          expect(mail.subject).to eq 'Fwd: Mail Subject'
+          expect(mail.in_reply_to).to be_nil
+          expect(mail.references).to be_nil
+        end
+
+        it 'uses the subject of the forwarded message when it has one' do
+          forwarded_message.update!(content_attributes: { email: { message_id: 'original@example.com', subject: 'Changed subject' } })
+
+          expect(mail.subject).to eq 'Fwd: Changed subject'
+        end
+
+        it 'uses the subject of the forwarded message when the conversation has none' do
+          conversation.update!(additional_attributes: {})
+          forwarded_message.update!(content_attributes: { email: { message_id: 'original@example.com', subject: 'Later subject' } })
+
+          expect(mail.subject).to eq 'Fwd: Later subject'
+        end
+
+        it 'keeps replies from the forward recipient out of the conversation' do
+          expect(mail.message_id).to start_with("forward/#{forward.id}@")
+          expect(mail.message_id).not_to include(conversation.uuid)
+          expect(mail.reply_to).to eq [email_channel.email]
+        end
+
+        it 'leaves the forward out of the conversation transcript' do
+          forward
+          transcript = described_class.conversation_transcript(conversation, 'customer@example.com').deliver_now
+
+          expect(transcript.decoded).not_to include('Forwarding this')
+        end
+      end
+
       context 'with custom email content' do
         it 'uses custom HTML content when available and creates multipart email' do
           message_with_custom_content = create(:message,
@@ -828,6 +930,15 @@ RSpec.describe ConversationReplyMailer do
           mail = described_class.email_reply(message)
 
           expect(mail['from'].value).to eq "#{conversation.inbox.business_name} <#{smtp_channel.email}>"
+        end
+
+        it 'quotes a business_name containing a comma so the sender parses to a single address' do
+          conversation.inbox.update!(business_name: 'Care Team, Billing')
+
+          mail = described_class.email_reply(message)
+
+          expect(mail['from'].value).to eq "\"Care Team, Billing\" <#{smtp_channel.email}>"
+          expect(mail.smtp_envelope_from).to eq smtp_channel.email
         end
       end
     end

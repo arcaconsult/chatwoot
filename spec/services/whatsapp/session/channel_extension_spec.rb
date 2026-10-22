@@ -46,11 +46,13 @@ RSpec.describe Whatsapp::Session::ChannelExtension do
   end
 
   describe 'validation' do
-    it 'refuses a session provider whose backend is not deployed yet' do
+    it 'refuses a session provider the installation turned off' do
       channel = build(:channel_whatsapp, account: account, provider: 'native', provider_config: {})
 
-      expect(channel).not_to be_valid
-      expect(channel.errors[:provider]).to include(I18n.t('errors.inboxes.channel.provider_unavailable'))
+      with_modified_env WHATSAPP_CONNECTOR_ENABLED: 'false' do
+        expect(channel).not_to be_valid
+        expect(channel.errors[:provider]).to include(I18n.t('errors.inboxes.channel.provider_unavailable'))
+      end
     end
 
     it 'reports the invalid config keys the backend rejected' do
@@ -298,6 +300,25 @@ RSpec.describe Whatsapp::Session::ChannelExtension do
       channel.update!(provider_config: { 'mark_as_read' => true })
 
       expect(channel.reload.provider_config['session_id']).to eq(original)
+    end
+
+    # Moving to another provider tears the session down, and the connector forgets a
+    # deleted session, epoch counter included. Coming back to native under the same id
+    # would start again at epoch 1 under the epoch and position kept for the old session,
+    # and every event of the new pairing would be dropped (fazer-ai/chatwoot#852).
+    it 'mints a new one when the inbox moves to another provider, and again when it comes back' do
+      channel = build_channel('native')
+      native = channel.provider_config['session_id']
+
+      channel.assign_attributes(provider: 'uazapi')
+      channel.valid?
+      moved = channel.provider_config['session_id']
+
+      channel.assign_attributes(provider: 'native')
+      channel.valid?
+
+      expect(moved).not_to eq(native)
+      expect(channel.provider_config['session_id']).not_to eq(moved)
     end
 
     it 'refuses one handed to it by a caller' do

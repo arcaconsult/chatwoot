@@ -137,7 +137,8 @@ class Message < ApplicationRecord
 
   store :content_attributes, accessors: [:submitted_email, :items, :submitted_values, :email, :in_reply_to, :deleted,
                                          :external_created_at, :story_sender, :story_id, :external_error,
-                                         :translations, :in_reply_to_external_id, :is_unsupported, :data,
+                                         :translations, :translation_failed, :translation_provider, :source_language,
+                                         :in_reply_to_external_id, :is_unsupported, :data,
                                          :is_reaction, :is_edited, :previous_content, :zapi_args, :referral, :rich,
                                          :deleted_by_contact, :pending_source_id, :edited_at, :is_masked], coder: JSON
 
@@ -147,6 +148,7 @@ class Message < ApplicationRecord
   scope :chat, -> { where.not(message_type: :activity).where(private: false) }
   scope :non_activity_messages, -> { where.not(message_type: :activity).reorder('created_at desc') }
   scope :today, -> { where("date_trunc('day', created_at) = ?", Date.current) }
+  scope :not_forwarded, -> { where("(messages.content_attributes #>> '{}')::jsonb -> 'forwarded_message_id' IS NULL") }
   scope :voice_calls, -> { where(content_type: :voice_call) }
   # Excludes reactions whose user-facing state is invisible (toggled off or
   # blank). Used when picking a "last meaningful message" for chat list
@@ -180,6 +182,8 @@ class Message < ApplicationRecord
   after_create_commit :execute_after_create_commit_callbacks
 
   after_update_commit :dispatch_update_event
+  # One registration: Rails keeps only the last of two commit callbacks naming the same method.
+  after_commit :clear_whatsapp_missing_flag, on: [:create, :update], if: :proves_whatsapp_presence?
   after_commit :reindex_for_search, if: :should_index?, on: [:create, :update]
 
   def channel_token
@@ -258,6 +262,10 @@ class Message < ApplicationRecord
     true
   end
 
+  def forwarded?
+    content_attributes['forwarded_message_id'].present?
+  end
+
   def auto_reply_email?
     return false unless incoming_email? || inbox.email?
 
@@ -302,6 +310,7 @@ class Message < ApplicationRecord
     return false if conversation.messages.outgoing
                                 .where.not(sender_type: ['AgentBot', 'Captain::Assistant'])
                                 .where.not(private: true)
+                                .not_forwarded
                                 .where("(additional_attributes->'campaign_id') is null").count > 1
 
     true
@@ -390,6 +399,15 @@ class Message < ApplicationRecord
     send_recovered_event if showing_recovered_body?
   end
 
+  # When WhatsApp says the message happened, which for an imported one is long before the
+  # row was written. WhatsApp stamps whole seconds, so this is the end of that second: a reply
+  # stamped in the second a lookup started may have been sent after it, and a reply proves the
+  # number either way, so the tie goes to presence.
+  def whatsapp_sent_at
+    seconds = content_attributes&.dig('external_created_at').presence
+    (seconds ? Time.zone.at(seconds.to_i) : created_at).change(usec: 999_999)
+  end
+
   private
 
   def prevent_message_flooding
@@ -440,6 +458,47 @@ class Message < ApplicationRecord
     update_contact_activity
   end
 
+  # Anything the contact sends, and any receipt from their phone, proves the number has
+  # WhatsApp, so a "no WhatsApp" flag left by an earlier lookup stops warning, as long as the
+  # evidence is newer than that lookup. On every thread of the contact in this inbox, since
+  # the flag is about the phone and a contact can hold more than one (phone and LID). One read
+  # that finds nothing in the usual case.
+  def clear_whatsapp_missing_flag
+    return unless inbox.channel_type == 'Channel::Whatsapp'
+
+    # A lookup still waiting on the provider has no flag here to clear, so the receipt is
+    # also left where that lookup will read it before writing its "no".
+    ContactInbox.remember_whatsapp_receipt(inbox_id, conversation.contact_id, created_at) if outgoing?
+    flagged = ContactInbox.where(inbox_id: inbox_id, contact_id: conversation.contact_id)
+                          .where(whatsapp_missing_checked_at: ...whatsapp_evidence_at)
+    ids = flagged.pluck(:id)
+    return if ids.empty?
+
+    flagged.where(id: ids).update_all(whatsapp_missing_checked_at: nil) # rubocop:disable Rails/SkipsModelValidations
+    # update_all skips the contact inbox's own commit callback, so the rare clear tells the
+    # dashboard itself. This conversation's loaded association still holds the old date, and
+    # this message's own callbacks broadcast it again right after (reopening it,
+    # waiting_since), so it is reloaded first.
+    conversation.reload_contact_inbox
+    ContactInbox.where(id: ids).find_each(&:broadcast_whatsapp_missing_change)
+  end
+
+  # An incoming message counts when it is written. An outgoing one counts only when a
+  # receipt moves it to delivered or read as it happens: an echo of a send from the paired
+  # phone is born delivered without any receipt, and an import replays receipts from the past.
+  def proves_whatsapp_presence?
+    return incoming? if previously_new_record?
+
+    outgoing? && saved_change_to_status? && (delivered? || read?) && !Import::SilentWrite.on?
+  end
+
+  # A message is as old as WhatsApp says it is, which for an imported one is long before the
+  # row was written. A receipt is as old as the message it answers: only one sent after the
+  # lookup surely went to the phone that lookup asked about, since a phone change wipes the
+  # flag and a send to a number with no account never gets a receipt. A late receipt for an
+  # older message is left to the recheck.
+  def whatsapp_evidence_at = incoming? ? whatsapp_sent_at : created_at
+
   def update_contact_activity
     sender.update!(last_activity_at: DateTime.now) if sender.is_a?(Contact)
   end
@@ -485,7 +544,9 @@ class Message < ApplicationRecord
     # if automation rule id is present, it's not a human response
     # if campaign id is present, it's not a human response
     # external echo messages are responses sent from the native app (WhatsApp Business, Instagram)
+    # forwarded emails go to a third party, not to the contact
     outgoing? &&
+      !forwarded? &&
       content_attributes['automation_rule_id'].blank? &&
       additional_attributes['campaign_id'].blank? &&
       (sender.is_a?(User) || content_attributes['external_echo'].present?)
@@ -565,10 +626,10 @@ class Message < ApplicationRecord
     return if conversation.muted?
     return unless incoming?
     return if reaction?
+    return unless conversation.snoozed? || conversation.resolved?
 
-    conversation.open! if conversation.snoozed?
-
-    reopen_resolved_conversation if conversation.resolved?
+    conversation.check_assignee_team_on_reopen
+    conversation.snoozed? ? conversation.open! : reopen_resolved_conversation
   end
 
   def mark_pending_conversation_as_open_for_human_response
@@ -587,6 +648,7 @@ class Message < ApplicationRecord
   def reopen_resolved_conversation
     # mark resolved bot conversation as pending to be reopened by bot processor service
     if conversation.inbox.active_bot?
+      conversation.hand_reopen_to_agent_bot
       conversation.pending!
     elsif conversation.inbox.api?
       Current.executed_by = sender if reopened_by_contact?

@@ -225,8 +225,10 @@ export default {
       <WootMessageEditor
         v-else-if="inputType === 'textarea'"
         v-model="castMessageVmodel"
+        override-line-breaks
         rows="4"
         enable-variables
+        :enable-automation-variables="!isMacro"
         :placeholder="$t('AUTOMATION.ACTION.TEAM_MESSAGE_INPUT_PLACEHOLDER')"
         class="[&_.ProseMirror-menubar]:hidden px-3 py-1 bg-n-alpha-1 rounded-lg outline outline-1 outline-n-weak dark:outline-n-strong"
       />

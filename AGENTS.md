@@ -42,6 +42,9 @@
 
 ## General Guidelines
 
+- **Database foreign keys**: Prefer Rails associations and callbacks over database foreign-key constraints. Add a database foreign key only when there is a clear need and after checking deletion behavior and production migration/locking risks. Existing foreign keys alone are not a reason to add new ones.
+- **Migrations**: Create migrations with `bundle exec rails g migration <Name>` so the version is a real timestamp. Never hand-write or round the version (e.g. `20260925000000`); rounded versions collide across branches and break `db:migrate`.
+- **No custom SQL**: Write queries and data migrations in Ruby with ActiveRecord (`where`, `find_each`, `update!`). Do not use `execute`, SQL heredocs or raw SQL strings.
 - Prefer the smallest production-ready change that solves the current problem.
 - Build for the expected production path first. Do not add speculative guards, fallbacks, retries, or edge-case handling unless the caller can actually hit that case or production has proven it necessary.
 - Enforce eligibility and exclusivity rules at the earliest shared entry point. Do not repeat backup guards across downstream jobs, callbacks, services, or writes unless a proven independent path bypasses that point.
@@ -53,6 +56,9 @@
 - Prefer existing repo dependencies/client libraries over hand-rolled protocol code for auth, signing, parsing, or API plumbing.
 - Avoid one-use private helpers unless they hide real complexity or make the main flow meaningfully easier to read.
 - Prefer minimal, readable code over elaborate abstractions; clarity beats cleverness
+- Optimize for human-readable, idiomatic Rails code. Prefer clear model methods, associations, scopes, and named route helpers over dense controller chains or manually assembled paths.
+- Keep record relationships, association traversal, and reusable database queries in models or model scopes. Return an ActiveRecord relation when callers need to filter or order the result.
+- Controllers should coordinate requests and prepare responses. Keep request-specific URL generation and presentation logic in controllers or view helpers. Before finalizing controller changes, check that relationship and traversal logic lives in the model layer.
 - Break down complex tasks into small, testable units
 - Iterate after confirmation
 - New features must include specs covering the main flows (happy path + critical edge cases). Bugfixes should add a regression spec when the fix is non-trivial. Skip specs only for purely cosmetic changes (CSS tweaks, copy adjustments, log message edits) or when the user explicitly asks to skip.
@@ -157,6 +163,7 @@ When unsure, be explicit: `gh pr create --repo fazer-ai/chatwoot` (for Pro PRs, 
 - **Translations**: the fork's strings live in their own tree, never inside upstream's locale files. See **Fork translations** below.
 - **Frontend**:
   - Use `components-next/` for message bubbles (the rest is being deprecated)
+- **Conversation ids: the dashboard knows a conversation by its `display_id`.** `Conversations::EventDataPresenter#push_data` sends `id: display_id`, so `allConversations[].id`, `currentChat.id`, the routes and every `/conversations/:id` endpoint use the display id. Other payloads that embed a conversation do not always follow that: the kanban task's `conversations[]` has the internal id in `id` next to `display_id`, and the WhatsApp `voice_call.*` events from `Call#broadcast_voice_call_event`, `Whatsapp::CallService` and `Whatsapp::CallPermissionReplyService` still send the internal id as `conversation_id` (nothing reads it there today; the ones from `Whatsapp::IncomingCallService`, which the call widget does read, carry the display id since #735). Before you match an embedded id against the store, a route or the API, read what the producer actually sends. And write the spec with an internal id that differs from the display id: with `{ id: 10 }` and nothing else, the wrong key passes. This is not hypothetical. In 2026-09 the kanban cable handlers matched on `conversations[].id` and put one clinic patient's card on another patient's conversation (fazer-ai/chatwoot-pro#90), and the specs that should have caught it used exactly such a payload.
 
 ## Ruby Best Practices
 
@@ -174,6 +181,7 @@ When unsure, be explicit: `gh pr create --repo fazer-ai/chatwoot` (for Pro PRs, 
 ## Enterprise Edition Notes
 
 - Chatwoot has an Enterprise overlay under `enterprise/` that extends/overrides OSS code.
+- **Code under `enterprise/` does not run on CE installs.** The CE image workflow (`publish_github_docker.yml`) runs `rm -rf enterprise` before it builds, and premium features such as `channel_voice` stay off on the community pricing plan. In this fork, what turns them on is Pro's `fazer_ai/` hub layer, which sets the pricing plan. So a defect in `enterprise/` only shows up for Pro customers. The fix still lands here in CE, because the file is shared and Pro receives it through the sync. An issue about `enterprise/` code must say that it only affects Pro and which feature has to be on for it to happen, so nobody triages it as affecting every install.
 - When you add or modify core functionality, always check for corresponding files in `enterprise/` and keep behavior compatible.
 - Follow the Enterprise development practices documented here:
   - https://chatwoot.help/hc/handbook/articles/developing-enterprise-edition-features-38

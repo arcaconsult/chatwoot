@@ -12,6 +12,7 @@ import ChannelSelector from 'dashboard/components/ChannelSelector.vue';
 import BaileysWhatsapp from './BaileysWhatsapp.vue';
 import ZapiWhatsapp from './ZapiWhatsapp.vue';
 import SessionWhatsapp from './session/SessionWhatsapp.vue';
+import WhatsappLegacyProviderBanner from '../components/WhatsappLegacyProviderBanner.vue';
 import Banner from 'dashboard/components-next/banner/Banner.vue';
 import Button from 'dashboard/components-next/button/Button.vue';
 import Icon from 'dashboard/components-next/icon/Icon.vue';
@@ -133,6 +134,10 @@ const shouldShowEmbeddedSignupAccessRequest = computed(() => {
 });
 
 const PROVIDER_CATALOG = computed(() => [
+  // The order the picker shows them in: the official API first, then the connection by QR
+  // code on the installation's own server, the other official route, the paid QR APIs, and
+  // the frozen Baileys last. Providers the server does not offer drop out without moving
+  // the rest.
   {
     key: PROVIDER_TYPES.WHATSAPP,
     title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.WHATSAPP_CLOUD'),
@@ -142,16 +147,22 @@ const PROVIDER_CATALOG = computed(() => [
     icon: 'i-woot-whatsapp',
   },
   {
+    key: PROVIDER_TYPES.NATIVE,
+    title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.NATIVE'),
+    description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.NATIVE_DESC'),
+    icon: 'i-woot-whatsapp-native',
+  },
+  {
     key: PROVIDER_TYPES.TWILIO,
     title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.TWILIO'),
     description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.TWILIO_DESC'),
     icon: 'i-woot-twilio',
   },
   {
-    key: PROVIDER_TYPES.BAILEYS,
-    title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.BAILEYS'),
-    description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.BAILEYS_DESC'),
-    icon: 'i-woot-baileys',
+    key: PROVIDER_TYPES.UAZAPI,
+    title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.UAZAPI'),
+    description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.UAZAPI_DESC'),
+    icon: 'i-woot-uazapi',
   },
   {
     key: PROVIDER_TYPES.ZAPI,
@@ -160,16 +171,10 @@ const PROVIDER_CATALOG = computed(() => [
     icon: 'i-woot-zapi',
   },
   {
-    key: PROVIDER_TYPES.NATIVE,
-    title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.NATIVE'),
-    description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.NATIVE_DESC'),
-    icon: 'i-woot-whatsapp-native',
-  },
-  {
-    key: PROVIDER_TYPES.UAZAPI,
-    title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.UAZAPI'),
-    description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.UAZAPI_DESC'),
-    icon: 'i-woot-uazapi',
+    key: PROVIDER_TYPES.BAILEYS,
+    title: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.BAILEYS'),
+    description: t('INBOX_MGMT.ADD.WHATSAPP.PROVIDERS.BAILEYS_DESC'),
+    icon: 'i-woot-baileys',
   },
   {
     key: PROVIDER_TYPES.THREE_SIXTY_DIALOG,
@@ -208,6 +213,8 @@ const selectedDescriptor = computed(() =>
 // rather than a literal in the label: ending the beta is one field on the descriptor.
 // The cloud providers have no descriptor here and answer false, which is what they are.
 const isBetaProvider = key => Boolean(descriptorFor(key)?.beta);
+// Legacy the same way: the catalog says so, and a provider's withdrawal is a server change.
+const isLegacyProvider = key => Boolean(descriptorFor(key)?.legacy);
 
 const availableProviders = computed(() => {
   const allowed = [
@@ -218,6 +225,13 @@ const availableProviders = computed(() => {
     .filter(p => allowed.includes(p.key))
     .filter(p => !isConvertMode.value || p.key !== currentProviderKey.value);
 });
+
+// What this screen could actually open, not only what the catalog offers the account: a
+// conversion leaves out the inbox's own provider, so a native inbox being converted to a
+// legacy one has no native target to recommend.
+const isNativeAvailable = computed(() =>
+  availableProviders.value.some(({ key }) => key === PROVIDER_TYPES.NATIVE)
+);
 
 const currentProviderLabel = computed(() => {
   if (!isConvertMode.value || !currentProviderKey.value) return '';
@@ -393,12 +407,19 @@ const requestEmbeddedSignupAccess = () => {
           :description="provider.description"
           :icon="provider.icon"
           :is-beta="isBetaProvider(provider.key)"
+          :is-legacy="isLegacyProvider(provider.key)"
           @click="selectProvider(provider.key)"
         />
       </div>
     </div>
 
     <div v-else-if="showConfiguration">
+      <WhatsappLegacyProviderBanner
+        v-if="isLegacyProvider(selectedProvider)"
+        :native-available="isNativeAvailable"
+        class="mb-4"
+        @use-native="selectProvider(PROVIDER_TYPES.NATIVE)"
+      />
       <div class="px-6 py-5 rounded-2xl border border-n-weak">
         <!-- Show embedded signup if app ID is configured -->
         <div v-if="shouldShowWhatsappEmbeddedSignup">

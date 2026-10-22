@@ -54,7 +54,7 @@
             "PAIRING_CODE_STEP_2": "Go to Linked devices and tap Link a device.",
             "PAIRING_CODE_STEP_3": "Tap \"Link with phone number instead\" and type the code above.",
             "PAIRING_CODE_EXPIRES": "The code is good for a few minutes. Ask for another one if it expires.",
-            "RECONNECTING": "Connecting...",
+            "RECONNECTING": "Reconnecting...",
             "LINK_DEVICE": "Link device",
             "DISCONNECT": "Disconnect",
             "CONNECTED": "Your device has been connected successfully. You can now start sending and receiving messages.",
@@ -87,7 +87,28 @@
             "HISTORY_SYNC": {
               "LABEL": "Import older conversations when pairing",
               "DESCRIPTION": "Brings in the history the phone offers at pairing, all of it as resolved conversations. Messages received while the connection was down are recovered either way."
+            },
+            "PROXY_URL": {
+              "LABEL": "Proxy (optional)",
+              "PLACEHOLDER": "socks5://user:password{'@'}host:port",
+              "DESCRIPTION": "WhatsApp for this inbox goes out through this address. Leave it empty to connect directly. WhatsApp calls do not go through a proxy: saving one turns calls off for this inbox.",
+              "ERROR": "Use an http, https or socks5 address with a host"
             }
+          }
+        },
+        "LEGACY_PROVIDER": {
+          "BADGE": "Legacy",
+          "BADGE_DESCRIPTION": "This provider still works, and receives no new features.",
+          "NOTICE": "This provider is legacy. It still works.",
+          "NOTICE_WITH_NATIVE": "This provider is legacy. It still works, but we recommend WhatsApp (native) instead.",
+          "CONVERT_TO_NATIVE": "Convert to WhatsApp (native)",
+          "USE_NATIVE": "Use WhatsApp (native)"
+        },
+        "MANUAL_SETUP": {
+          "APP_SECRET": {
+            "LABEL": "App Secret",
+            "PLACEHOLDER": "Paste your Meta app's App Secret",
+            "HELP": "In your app on developers.facebook.com, open App settings > Basic and copy the App secret. It confirms that each webhook really comes from Meta."
           }
         }
       }
@@ -140,11 +161,37 @@
       "WHATSAPP_CLIENT_TOKEN_TITLE": "Security Token",
       "WHATSAPP_CLIENT_TOKEN_SUBHEADER": "Your Z-API Client Token (see Security tab on Z-API dashboard).",
       "WHATSAPP_CLIENT_TOKEN_UPDATE_TITLE": "Update Security Token",
-      "WHATSAPP_CLIENT_TOKEN_UPDATE_SUBHEADER": "Enter the new Security Token here"
+      "WHATSAPP_CLIENT_TOKEN_UPDATE_SUBHEADER": "Enter the new Security Token here",
+      "WHATSAPP_APP_SECRET": {
+        "TITLE": "App Secret",
+        "HELP": "The secret of the Meta app that issued this inbox's access token. It confirms that each webhook really comes from Meta.",
+        "MISSING": "This inbox has no App Secret, so its webhooks are accepted without checking that they come from Meta. A future version will refuse them: add the App Secret to keep receiving messages.",
+        "CONFIGURED": "App Secret configured",
+        "PLACEHOLDER": "Paste the App Secret",
+        "ADD": "Add",
+        "REPLACE": "Replace",
+        "SUCCESS": "App Secret saved",
+        "ERROR": "Could not save the App Secret. Check that it belongs to the same Meta app that issued this inbox's access token."
+      },
+      "ZAPI_WEBHOOK_URL": {
+        "TITLE": "Receiving address",
+        "HELP": "Z-API delivers this inbox's messages to an address with a key of its own. If that address shows up where it should not, such as a log or a support ticket, generate a new one: Z-API switches to it and the old one stops working.",
+        "BUTTON": "Generate new address",
+        "SUCCESS": "New address registered with Z-API.",
+        "ERROR": "Z-API did not accept the new address. The inbox keeps receiving on the current one; try again."
+      },
+      "WHATSAPP_DISCONNECTED": {
+        "MESSAGE": "This WhatsApp is not connected, so the inbox cannot send or receive messages. Connect the phone to pair it again.",
+        "CONNECT": "Connect"
+      }
     },
     "ASSIGNMENT": {
       "PREVENT_TAKEOVER": "Prevent assignment takeover",
-      "PREVENT_TAKEOVER_SUB_TEXT": "Once an agent takes a conversation, only they or an administrator can change who is handling it. Automatic assignment is not affected."
+      "PREVENT_TAKEOVER_SUB_TEXT": "Once an agent takes a conversation, only they or an administrator can change who is handling it. Automatic assignment is not affected.",
+      "REOPEN_TEAM": {
+        "TITLE": "Keep the assignee on reopen only if they are in the conversation's team",
+        "DESCRIPTION": "When a customer's message reopens a resolved or snoozed conversation that has a team, the assignee keeps it only if they are a member of that team. Otherwise the conversation goes to Unassigned, keeping its team and labels."
+      }
     },
     "CSAT": {
       "TEMPLATE_MODE": {
@@ -195,6 +242,16 @@
       "EDIT": {
         "BUTTON_TEXT": "Update",
         "SUCCESS_MESSAGE": "Conversation continuity updated successfully"
+      }
+    },
+    "WHATSAPP_CALLING": {
+      "ENABLE": {
+        "PAIRED_DESCRIPTION": "Allow agents to receive and place WhatsApp calls on this inbox, through the phone paired with it. Customers can call this number directly from WhatsApp.",
+        "PROXY_BLOCKED": "This inbox goes out through a proxy, and WhatsApp calls do not go through a proxy: the voice goes straight from the server to WhatsApp. To turn calls on, remove the proxy in the {tab} tab.",
+        "CONNECTOR_WITHOUT_CALLS": "This installation's WhatsApp connector does not carry call voice. To turn calls on, set WAC_CALLS_UDP_PORT (for example 40000) and publish that port over UDP on the container the connector runs in (the Sidekiq worker, when embedded). Behind NAT, also set WAC_CALLS_PUBLIC_IP to the server's public IP."
+      },
+      "INBOUND_PHONE": {
+        "DESCRIPTION": "Let customers call this number and ring the agents here. When disabled, Chatwoot does not ring and calls keep ringing on the paired phone only. Agents can still place outbound calls."
       }
     }
   }

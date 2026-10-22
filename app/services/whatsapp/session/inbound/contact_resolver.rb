@@ -67,12 +67,19 @@ class Whatsapp::Session::Inbound::ContactResolver
     ).perform
   end
 
+  # The alternate numbers are for a contact with no contact_inbox here, which only its
+  # number can find: one created by hand or through the API (#776).
   def contact_attributes
     {
       name: party.name.presence || party.phone.presence || party.lid,
       phone_number: party.phone_e164,
+      phone_number_candidates: alternate_contact_phone_numbers,
       identifier: party.identifier
     }.compact
+  end
+
+  def alternate_contact_phone_numbers
+    Whatsapp::PhoneNumberNormalizationService.new(inbox).alternate_contact_phone_numbers(party.phone).presence
   end
 
   def update_contact(contact)

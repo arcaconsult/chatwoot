@@ -65,10 +65,14 @@ module Custom::ActionCableListener
     broadcast_to_contact(account, conversation, CONVERSATION_UPDATED, payload)
   end
 
+  # v4.19.0-fazer-ai.135: o upstream passou a mandar `automatic_assignment` no payload;
+  # mesma regra do ActionCableListener#assignee_changed, só trocando os tokens.
   def assignee_changed(event)
     conversation, account = extract_conversation_and_account(event)
+    automatic_assignment = [Inbox, AssignmentPolicy, AutomationRule].include?(event.data[:performed_by].class) || event.data[:user].present?
 
-    broadcast(account, visible_user_tokens(account, conversation), ASSIGNEE_CHANGED, conversation.push_event_data)
+    broadcast(account, visible_user_tokens(account, conversation), ASSIGNEE_CHANGED,
+              conversation.push_event_data.merge(automatic_assignment: automatic_assignment))
   end
 
   def team_changed(event)

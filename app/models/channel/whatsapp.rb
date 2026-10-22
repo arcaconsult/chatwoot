@@ -47,10 +47,12 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
   # snapshot, so keeping it would make the 5-min poll re-broadcast every cycle for no reason).
   NEW_CHAT_CAP_KEYS = %w[capping_status ote_status mv_status total_quota used_quota cycle_start_timestamp cycle_end_timestamp].freeze
   before_validation :ensure_webhook_verify_token
+  before_validation :keep_app_secret, if: -> { provider.in?(%w[whatsapp_cloud default]) }
 
   validates :provider, inclusion: { in: PROVIDERS }
   validates :phone_number, presence: true, uniqueness: true
   validate :validate_provider_config
+  validate :validate_app_secret, if: :app_secret_required?
 
   has_one :inbox, as: :channel, dependent: :destroy
 
@@ -75,6 +77,29 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
     voice_calling_supported? &&
       provider_config['calling_enabled'].present? &&
       account.feature_enabled?('channel_voice')
+  end
+
+  # Where a voice agent takes this inbox's calls: the connector carries the call's voice to this
+  # WebSocket instead of to an agent's browser. Nil when no voice agent answers them. Both halves
+  # are written by fazer.ai agents (Api::V1::Accounts::WhatsappAiVoiceController).
+  def ai_voice_stream_url
+    config = provider_config['ai_voice']
+    return unless config.is_a?(Hash) && config['enabled'] == true
+
+    config['stream_url'].presence
+  end
+
+  # Writes the switch, and the URL when one is given, without touching the rest of
+  # provider_config. Saved without validations, as the calling toggles are, so the provider's
+  # credential re-check cannot refuse it; and saved, not written past the callbacks, so the
+  # inbox cache is invalidated: a dashboard holding the old provider_config would write it back
+  # whole on its next settings save.
+  def update_ai_voice!(enabled:, stream_url: nil)
+    current = provider_config['ai_voice'].is_a?(Hash) ? provider_config['ai_voice'] : {}
+    current = current.merge('enabled' => enabled)
+    current['stream_url'] = stream_url if stream_url.present?
+    self.provider_config = provider_config.merge('ai_voice' => current)
+    save!(validate: false)
   end
 
   # Mutes only the incoming side of calling; default on, so only an explicit false disables inbound.
@@ -167,14 +192,24 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
     normalized = provider_connection.deep_stringify_keys
     return if normalized == self.provider_connection
 
+    previous_connection = self.provider_connection['connection']
+    connection_changed = normalized['connection'] != previous_connection
     assign_attributes(provider_connection: normalized)
     # NOTE: Skip `validate_provider_config?` check.
-    # `Inbox.no_touching` suppresses the `has_one :inbox, touch: true` callback
-    # (inherited from Channelable) so this high-frequency connection-status change does
-    # NOT touch the inbox and invalidate the whole account inbox cache. The change is
-    # pushed to clients via a targeted `inbox.provider_connection_updated` event.
-    Inbox.no_touching { save!(validate: false) }
-    broadcast_provider_connection_updated
+    # The change goes to clients through a targeted `inbox.provider_connection_updated`
+    # event, and most of these writes are frequent and say nothing a cached inbox list
+    # needs (a new QR every few seconds while pairing, an error, the epoch), so
+    # `Inbox.no_touching` keeps them from touching the inbox and invalidating the whole
+    # account inbox cache. A change of `connection` itself is rare and is the one thing
+    # that list shows: the inbox is touched for it, which moves the account's inbox key, so
+    # a dashboard that missed the event loads the right state on its next revalidation
+    # (reconnect or page load) instead of a dropped session as connected (#856).
+    if connection_changed
+      save!(validate: false)
+    else
+      Inbox.no_touching { save!(validate: false) }
+    end
+    broadcast_provider_connection_updated(previous_connection)
   end
 
   # Proactive (REST poll) / push update of just the reach-out lock. Unlike the connection.update
@@ -203,16 +238,29 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
   end
 
   def provider_connection_data
-    data = { connection: provider_connection['connection'] }
-    data[:reachout_time_lock] = provider_connection['reachout_time_lock'] if provider_connection['reachout_time_lock'].present?
-    data[:new_chat_cap] = provider_connection['new_chat_cap'] if provider_connection['new_chat_cap'].present?
-    # Agent-visible, unlike the QR and the error string: a stall carries no credential (a
-    # timeout count, a duration, what the provider decided to do and until when), and the
-    # agent is the one being told their reply went nowhere. Without it the conversation
-    # view has nothing to render, because `connection` still reads 'open' throughout.
-    data[:send_stall] = provider_connection['send_stall'] if provider_connection['send_stall'].present?
+    data = provider_connection_agent_data
     data.merge!(provider_connection_admin_data) if Current.account_user&.administrator?
     data
+  end
+
+  # The half of the connection payload every agent receives, shared by the REST serializer
+  # above and by the cable push for the same reason as the admin half below. None of it is
+  # credential-sensitive, and each piece is something the conversation view has no other
+  # way to learn:
+  #   - a send stall: a timeout count, a duration, what the provider decided to do and until
+  #     when; the agent is the one being told their reply went nowhere, and `connection`
+  #     still reads 'open' throughout;
+  #   - `rerouting`: the connector reconnecting on purpose (a proxy change). The error
+  #     string is admin-only, so without it a deliberate reconnect and an outage read the
+  #     same in an agent's view.
+  def provider_connection_agent_data(connection = provider_connection)
+    {
+      connection: connection['connection'],
+      reachout_time_lock: connection['reachout_time_lock'].presence,
+      new_chat_cap: connection['new_chat_cap'].presence,
+      send_stall: connection['send_stall'].presence,
+      rerouting: connection['rerouting'].presence
+    }.compact
   end
 
   # The admin-only half of the connection payload, shared by the REST serializer above and
@@ -278,7 +326,7 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
     Rails.logger.error "Failed to disconnect channel provider: #{e.message}"
   end
 
-  # rubocop:disable Metrics/MethodLength, Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity, Metrics/BlockLength
+  # rubocop:disable Metrics/MethodLength, Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/BlockLength
   def convert_provider!(new_provider:, new_provider_config:)
     # Serialize concurrent conversions of the same inbox. Without the lock,
     # two admin requests could both pass pre-validation, race the disconnect
@@ -330,7 +378,7 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
           @webhook_teardown_initiated = false
         end
       end
-      provider_service.disconnect_channel_provider if provider_service.respond_to?(:disconnect_channel_provider)
+      disconnect_previous_provider(previous_provider)
 
       assign_attributes(
         provider: new_provider,
@@ -361,7 +409,7 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
 
     self
   end
-  # rubocop:enable Metrics/MethodLength, Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity, Metrics/BlockLength
+  # rubocop:enable Metrics/MethodLength, Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/BlockLength
 
   def received_messages(messages, conversation)
     return unless provider_service.respond_to?(:received_messages)
@@ -370,10 +418,10 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
     provider_service.received_messages(recipient_id, messages)
   end
 
-  def on_whatsapp(phone_number)
+  def on_whatsapp(phone_number, deadline: :provider)
     return unless provider_service.respond_to?(:on_whatsapp)
 
-    provider_service.on_whatsapp(phone_number)
+    provider_service.on_whatsapp(phone_number, deadline: deadline)
   end
 
   def delete_message(message, conversation:)
@@ -447,6 +495,23 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
 
   private
 
+  # Ends the old provider's session before a conversion, and lets a failure abort it: a
+  # provider that is configured and does not answer may still hold a live session, and
+  # converting over it would leave two connections on one account. An installation with no
+  # provider configured at all has no session it could end, so there the conversion goes on
+  # and says so, instead of refusing forever and leaving the inbox stuck (#745).
+  def disconnect_previous_provider(previous_provider)
+    return unless provider_service.respond_to?(:disconnect_channel_provider)
+
+    if provider_service.respond_to?(:provider_configured?) && !provider_service.provider_configured?
+      Rails.logger.warn "[WHATSAPP] Converting inbox #{inbox&.id}: no #{previous_provider} provider is configured, " \
+                        'so its old session could not be ended'
+      return
+    end
+
+    provider_service.disconnect_channel_provider
+  end
+
   # `prompt_reauthorization!` is not a log line: it writes the marker, runs the handler that emails
   # the operator, invalidates the inbox cache and fires the event, and `Webhooks::WhatsappEventsJob`
   # discards every inbound webhook while the marker stands. Nothing clears it but a human. So it
@@ -501,18 +566,86 @@ class Channel::Whatsapp < ApplicationRecord # rubocop:disable Metrics/ClassLengt
 
   # Pushes the connection status to the account's agents over the websocket without
   # going through the full dispatcher, which would always enqueue an EventDispatcherJob
-  # (wasteful for such a high-frequency event). Sync-only keeps it cheap.
-  def broadcast_provider_connection_updated
+  # (wasteful for such a high-frequency event). Sync-only keeps it cheap. The previous
+  # `connection` travels with it so AgentBotListener can tell the rare change of state from
+  # the QR/error/epoch churn without reading anything.
+  def broadcast_provider_connection_updated(previous_connection)
     return if inbox.blank?
 
     Rails.configuration.dispatcher.sync_dispatcher.dispatch(
       Events::Types::INBOX_PROVIDER_CONNECTION_UPDATED, Time.zone.now,
-      inbox: inbox, provider_connection: provider_connection
+      inbox: inbox, provider_connection: provider_connection, previous_connection: previous_connection
     )
   end
 
+  # The stored token wins over whatever came in, because provider_config is permitted wholesale
+  # by the inbox API and an update is a plain replace of the column: one that leaves the token
+  # out would otherwise mint a new one while the provider keeps posting the old one. A provider
+  # change (creation included) is the one write that starts over.
+  # Z-API's token is never minted here: it is born with the URL that carries it, in
+  # Whatsapp::Providers::WhatsappZapiService#register_webhooks. So is the record of which Z-API
+  # instance took that URL, which closes the old one for the inbox and is kept the same way.
   def ensure_webhook_verify_token
-    provider_config['webhook_verify_token'] ||= SecureRandom.hex(16) if provider.in?(%w[whatsapp_cloud baileys])
+    return unless provider.in?(%w[whatsapp_cloud baileys zapi])
+
+    stored = provider_changed? ? {} : stored_provider_config
+    token = stored['webhook_verify_token'].presence || provider_config['webhook_verify_token'].presence
+    return keep_zapi_webhook_url(token, stored) if provider == 'zapi'
+
+    provider_config['webhook_verify_token'] = token || SecureRandom.hex(16)
+  end
+
+  # Kept like the token, for the same wholesale replace: an update that left the secret out
+  # would otherwise turn an inbox whose webhooks are verified back into one that takes them
+  # unsigned. Replacing it is fine; removing it is not something an update can do. The one
+  # exception is a move to embedded signup, which runs on the installation's app and is
+  # verified with WHATSAPP_APP_SECRET: the secret left from the manual setup belongs to
+  # another app, and would be checked against a token that app did not issue.
+  def keep_app_secret
+    return if provider_changed?
+
+    stored = stored_provider_config
+    return provider_config.delete('app_secret') if moving_to_embedded_signup?(stored)
+    return if provider_config['app_secret'].present? || stored['app_secret'].blank?
+
+    provider_config['app_secret'] = stored['app_secret']
+  end
+
+  def moving_to_embedded_signup?(stored)
+    provider_config['source'] == 'embedded_signup' && stored['source'] != 'embedded_signup'
+  end
+
+  # The row as it is now, locked until this save commits, rather than provider_config_was: a record
+  # loaded before a Z-API token was reserved would otherwise write the config back without it.
+  def stored_provider_config
+    return {} if new_record?
+
+    self.class.lock.where(id: id).pick(:provider_config).to_h
+  end
+
+  def keep_zapi_webhook_url(token, stored)
+    provider_config['webhook_verify_token'] = token if token
+    provider_config['webhook_url_confirmed_for'] = stored['webhook_url_confirmed_for'] if stored['webhook_url_confirmed_for']
+    if stored['previous_webhook_verify_token']
+      provider_config['previous_webhook_verify_token'] = stored['previous_webhook_verify_token']
+    else
+      provider_config.delete('previous_webhook_verify_token')
+    end
+  end
+
+  # Meta signs every Cloud webhook with the secret of the app that issued the token. Embedded
+  # signup runs on the installation's own app, whose secret is WHATSAPP_APP_SECRET; any other
+  # Cloud inbox brings its app's, or its webhooks cannot be told apart from a forged one. Asked
+  # for when an inbox becomes a manual Cloud inbox (created, converted or moved off embedded
+  # signup), so the inboxes that already exist keep working until their operator adds it.
+  def app_secret_required?
+    return false unless provider == 'whatsapp_cloud' && provider_config['source'] != 'embedded_signup'
+
+    new_record? || provider_changed? || provider_config_was.to_h['source'] == 'embedded_signup'
+  end
+
+  def validate_app_secret
+    errors.add(:provider_config, 'App secret is required') if provider_config['app_secret'].blank?
   end
 
   # A check that could not reach a verdict is neither a refusal nor a broken application, so it gets a

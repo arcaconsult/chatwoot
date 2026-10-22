@@ -65,6 +65,31 @@ describe ActionCableListener do
     end
   end
 
+  describe '#conversation_bot_handoff' do
+    let(:event) { Events::Base.new(:'conversation.bot_handoff', Time.zone.now, conversation: conversation) }
+
+    it 'broadcasts the handoff to inbox agents and account admins only' do
+      expect(ActionCableBroadcastJob).to receive(:perform_later).with(
+        a_collection_containing_exactly(agent.pubsub_token, admin.pubsub_token),
+        'conversation.bot_handoff',
+        conversation.push_event_data.merge(account_id: account.id)
+      )
+
+      listener.conversation_bot_handoff(event)
+    end
+
+    it 'includes the performer so dashboards can distinguish human takeovers' do
+      Current.user = agent
+      expect(ActionCableBroadcastJob).to receive(:perform_later).with(
+        a_collection_containing_exactly(agent.pubsub_token, admin.pubsub_token),
+        'conversation.bot_handoff',
+        conversation.push_event_data.merge(account_id: account.id, performer: agent.push_event_data)
+      )
+
+      listener.conversation_bot_handoff(event)
+    end
+  end
+
   describe '#account_cache_invalidated' do
     let!(:event) do
       Events::Base.new(
@@ -649,6 +674,23 @@ describe ActionCableListener do
             },
             account_id: account.id
           }
+        )
+        allow(ActionCableBroadcastJob).to receive(:perform_later).with([admin.pubsub_token], anything, anything)
+
+        listener.inbox_provider_connection_updated(event)
+      end
+    end
+
+    context 'when the connection is being rerouted' do
+      let(:provider_connection) { { 'connection' => 'reconnecting', 'rerouting' => true } }
+
+      # A proxy change, which comes back on its own. The agent gets no error string, so
+      # without the flag a deliberate reconnect and a real outage read the same.
+      it 'tells the agent the reconnect is deliberate' do
+        expect(ActionCableBroadcastJob).to receive(:perform_later).with(
+          [agent.pubsub_token],
+          'inbox.provider_connection_updated',
+          { inbox_id: inbox.id, provider_connection: { connection: 'reconnecting', rerouting: true }, account_id: account.id }
         )
         allow(ActionCableBroadcastJob).to receive(:perform_later).with([admin.pubsub_token], anything, anything)
 
