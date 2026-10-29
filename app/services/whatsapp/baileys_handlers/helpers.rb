@@ -15,12 +15,8 @@ module Whatsapp::BaileysHandlers::Helpers # rubocop:disable Metrics/ModuleLength
   PHONE_JID_SERVERS = %w[s.whatsapp.net c.us].freeze
   LID_JID_SERVER = 'lid'.freeze
 
-  # NOTE (Arcaconsult patch): Baileys manda um frame inicial de notificacao
-  # para midia de visualizacao unica sem a chave `message` (so isViewOnce:
-  # true, o conteudo chega depois). unwrap_message_content assumia que msg
-  # era sempre um Hash e quebrava com NoMethodError em nil, mandando o job
-  # do Sidekiq pra fila morta. Default para {} para cair na classificacao
-  # existente 'unsupported' em vez de estourar excecao.
+  # An upsert entry can carry no message at all (a view-once message, which WhatsApp does
+  # not deliver to linked devices), so a missing one reads as empty rather than raising.
   def unwrap_message_content(msg)
     msg ||= {}
     5.times do
@@ -66,6 +62,10 @@ module Whatsapp::BaileysHandlers::Helpers # rubocop:disable Metrics/ModuleLength
 
   def message_type # rubocop:disable Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity,Metrics/MethodLength,Metrics/AbcSize
     msg = unwrap_message_content(@raw_message[:message])
+    # Nothing but the key arrived. For view-once that is WhatsApp withholding the content
+    # from linked devices, and the agent still has to learn something was sent.
+    return @raw_message.dig(:key, :isViewOnce) ? 'view_once' : 'empty' if msg.blank?
+
     # A Click-to-WhatsApp ad-click can arrive as an extendedTextMessage carrying
     # only the ad context (no text). Classify it as text so it renders with the
     # ad headline/body as fallback content instead of being dropped/unsupported.
@@ -334,18 +334,18 @@ module Whatsapp::BaileysHandlers::Helpers # rubocop:disable Metrics/ModuleLength
   # a blob we have no key for, and rendering it as an unsupported message is
   # worse than dropping it.
   def ignore_message?
-    message_type.in?(%w[protocol context edited album secret])
+    message_type.in?(%w[protocol context edited album secret empty])
   end
 
   # A protocolMessage of type REVOKE is the contact deleting a message for everyone.
   # Baileys delivers it as a messages.upsert entry whose protocolMessage.key.id
   # points at the original message.
   def protocol_revoke?
-    unwrap_message_content(@raw_message[:message] || {}).dig(:protocolMessage, :type) == 'REVOKE'
+    unwrap_message_content(@raw_message[:message]).dig(:protocolMessage, :type) == 'REVOKE'
   end
 
   def protocol_revoke_target_id
-    unwrap_message_content(@raw_message[:message] || {}).dig(:protocolMessage, :key, :id)
+    unwrap_message_content(@raw_message[:message]).dig(:protocolMessage, :key, :id)
   end
 
   def reaction_removal?
