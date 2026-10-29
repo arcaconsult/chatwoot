@@ -513,7 +513,13 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
     backend.mark_unread(model::Commands::MessageMarkUnread.new(chat: model::Address.phone('5541999990000'),
                                                                last_message_id: '3EB0AAAA', from_me: false))
     backend.subscribe_presence(model::Commands::PresenceSubscribe.new(party: model::Address.phone('5541999990000')))
+    backend.archive_chat(model::Commands::ChatArchive.new(chat: model::Address.phone('5541999990000'), archive: true))
+    backend.mute_chat(model::Commands::ChatMute.new(chat: model::Address.phone('5541999990000'), mute: true))
 
+    expect(client).to have_received(:publish)
+      .with(an_instance_of(model::Commands::ChatArchive), timeout: described_class::DEFERRABLE_TIMEOUT)
+    expect(client).to have_received(:publish)
+      .with(an_instance_of(model::Commands::ChatMute), timeout: described_class::DEFERRABLE_TIMEOUT)
     expect(client).to have_received(:publish)
       .with(an_instance_of(model::Commands::MessageMarkRead), timeout: described_class::DEFERRABLE_TIMEOUT)
     expect(client).to have_received(:publish)

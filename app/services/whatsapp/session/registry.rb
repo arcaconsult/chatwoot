@@ -59,7 +59,7 @@ module Whatsapp::Session::Registry # rubocop:disable Metrics/ModuleLength
       # was down comes in the same dump, and that part is filed with the field off too.
       capabilities: %w[
         qr_pairing code_pairing echo_by_reserved_id edit revoke reactions typing presence
-        presence_subscribe read_receipts mark_unread check_number profile_picture groups
+        presence_subscribe read_receipts mark_unread archive mute check_number profile_picture groups
         group_management group_admin group_invites group_join_requests media_download calls voice_calls
         history_sync
       ],

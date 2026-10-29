@@ -15,6 +15,8 @@ module Whatsapp::Session::Capabilities
     presence_subscribe
     read_receipts
     mark_unread
+    archive
+    mute
     check_number
     profile_picture
     groups
@@ -47,6 +49,8 @@ module Whatsapp::Session::Capabilities
     'presence_subscribe' => :subscribe_presence,
     'read_receipts' => :mark_read,
     'mark_unread' => :mark_unread,
+    'archive' => :archive_chat,
+    'mute' => :mute_chat,
     'check_number' => :check_numbers,
     'profile_picture' => :profile_picture_url,
     'account_limits' => :fetch_account_limits,

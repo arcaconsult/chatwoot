@@ -29,6 +29,8 @@ export const CAPABILITIES = {
   PRESENCE_SUBSCRIBE: 'presence_subscribe',
   READ_RECEIPTS: 'read_receipts',
   MARK_UNREAD: 'mark_unread',
+  ARCHIVE: 'archive',
+  MUTE: 'mute',
   CHECK_NUMBER: 'check_number',
   PROFILE_PICTURE: 'profile_picture',
   GROUPS: 'groups',

@@ -50,11 +50,11 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
     it 'finds every publish site the backend has' do
       # Vacuity guard: a rename or a refactor that hides the calls would leave the sweep
       # passing over nothing at all.
-      expect(publish_sites.size).to eq(12)
+      expect(publish_sites.size).to eq(14)
       expect(publish_sites.map(&:first).uniq)
         .to contain_exactly('disconnect', 'logout', 'delete_session', 'request_pairing_code', 'mark_read',
-                            'mark_unread', 'send_chat_presence', 'update_presence', 'subscribe_presence',
-                            'accept_call', 'reject_call', 'terminate_call')
+                            'mark_unread', 'archive_chat', 'mute_chat', 'send_chat_presence', 'update_presence',
+                            'subscribe_presence', 'accept_call', 'reject_call', 'terminate_call')
     end
 
     it 'finds every control site the backend has' do
@@ -90,7 +90,7 @@ RSpec.describe Whatsapp::Session::Backends::Connector::Backend do
                                                 .transform_values { |sites| sites.map(&:first).uniq }
 
       expect(by_bound[:deadline]).to contain_exactly('request_pairing_code', 'mark_read', 'mark_unread',
-                                                     'send_chat_presence', 'update_presence', 'subscribe_presence',
+                                                     'archive_chat', 'mute_chat', 'send_chat_presence', 'update_presence', 'subscribe_presence',
                                                      'accept_call', 'reject_call')
       # A hang-up queued behind media must not be refused unrun after the call was closed here.
       expect(by_bound[:runtime]).to contain_exactly('disconnect', 'logout', 'delete_session', 'terminate_call')

@@ -101,6 +101,16 @@ class Whatsapp::Session::Backends::Fake < Whatsapp::Session::Backend # rubocop:d
     true
   end
 
+  def archive_chat(command)
+    record(command)
+    true
+  end
+
+  def mute_chat(command)
+    record(command)
+    true
+  end
+
   def download_media(command)
     record(command)
     model::MediaPayload.new(io: StringIO.new('fake-media'), mime: command.ref&.mime || 'application/octet-stream',

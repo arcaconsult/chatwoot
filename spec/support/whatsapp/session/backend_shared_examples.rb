@@ -23,6 +23,8 @@ RSpec.shared_examples 'a whatsapp session backend' do
       subscribe_presence: [commands::PresenceSubscribe.new(party: phone_address)],
       mark_read: [commands::MessageMarkRead.new(chat: phone_address, message_ids: ['3EB0AAAA'])],
       mark_unread: [commands::MessageMarkUnread.new(chat: phone_address)],
+      archive_chat: [commands::ChatArchive.new(chat: phone_address, archive: true)],
+      mute_chat: [commands::ChatMute.new(chat: phone_address, mute: true)],
       check_numbers: [commands::ContactCheck.new(phones: ['5541999990000'])],
       profile_picture_url: [commands::ContactProfilePicture.new(party: phone_address)],
       fetch_account_limits: [],

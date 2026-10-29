@@ -153,6 +153,24 @@ module Whatsapp::Session::Model::Commands
     coerce chat: Address, before: HistoryAnchor
   end
 
+  # Archives (or unarchives) the chat on the account's own devices, as of `last_message`:
+  # the newest message Chatwoot holds for it, which is what lets the phone tell a chat
+  # archived as of that message from one that got a message since. Arcaconsult addition,
+  # carried by the connector patch on top of v0.8.5 (`chat.archive`).
+  class ChatArchive < Data.define(:chat, :archive, :last_message)
+    include Serializable
+    wire_type 'chat.archive'
+    coerce chat: Address, last_message: HistoryAnchor
+  end
+
+  # Mutes the chat until `until` (epoch ms), or for good when it is nil; `mute: false`
+  # unmutes it. Arcaconsult addition (`chat.mute`).
+  class ChatMute < Data.define(:chat, :mute, :until)
+    include Serializable
+    wire_type 'chat.mute'
+    coerce chat: Address
+  end
+
   class PresenceSet < Data.define(:state)
     include Serializable
     wire_type 'presence.set'
@@ -302,7 +320,7 @@ module Whatsapp::Session::Model::Commands
     SessionConnect, SessionDisconnect, SessionLogout, SessionDelete, SessionStatus, SessionUpdate, SessionWake,
     AdminPing, PairingRequestCode, PairingPasskeyResponse, PairingPasskeyConfirm, HistoryRequest, MessageSend, MessageEdit,
     MessageRevoke, MessageReact, MessageMarkRead, MessageMarkUnread, MessageDownloadMedia, PresenceSet,
-    PresenceSubscribe, ChatPresence, ContactCheck, ContactProfilePicture, ContactInfo, ContactResolve, GroupCreate,
+    PresenceSubscribe, ChatPresence, ChatArchive, ChatMute, ContactCheck, ContactProfilePicture, ContactInfo, ContactResolve, GroupCreate,
     GroupInfo, GroupList, GroupLeave, GroupParticipantsUpdate, GroupNameSet, GroupDescriptionSet, GroupPhotoSet,
     GroupSettingsSet, GroupInviteGet, GroupJoinRequestsList, GroupJoinRequestsUpdate, CallReject,
     CallAccept, CallStart, CallTerminate

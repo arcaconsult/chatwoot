@@ -2,7 +2,10 @@
 FROM node:24-alpine as node
 # The WhatsApp connector Sidekiq runs unless WHATSAPP_CONNECTOR_ENABLED=false (see
 # docker/entrypoints/helpers/whatsapp_connector.rb). Pinned, and moved by Dependabot.
-FROM ghcr.io/fazer-ai/whatsapp-connector:0.8.5 AS whatsapp-connector
+# Arcaconsult: imagem LOCAL do connector, v0.8.5 + patch chat.archive/chat.mute (branch
+# feat/arquivar-silenciar em ~/projects/whatsapp-connector). Ao atualizar a fazer.ai,
+# reaplicar o patch na tag nova e gerar 0.X.Y-arca.N (ver projetos/chatwoot/PLANO-WHATSAPP-ARQUIVAR.md).
+FROM arcaconsult/whatsapp-connector:0.8.5-arca.1 AS whatsapp-connector
 FROM ruby:3.4.4-alpine3.21 AS pre-builder
 
 ARG NODE_VERSION="24.13.0"

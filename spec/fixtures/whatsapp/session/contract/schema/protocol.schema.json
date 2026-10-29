@@ -776,6 +776,8 @@
             { "properties": { "type": { "const": "presence.set" }, "payload": { "$ref": "#/definitions/command_presence_set" } }, "required": ["type"] },
             { "properties": { "type": { "const": "presence.subscribe" }, "payload": { "$ref": "#/definitions/command_presence_subscribe" } }, "required": ["type"] },
             { "properties": { "type": { "const": "chat.presence" }, "payload": { "$ref": "#/definitions/command_chat_presence" } }, "required": ["type"] },
+            { "properties": { "type": { "const": "chat.archive" }, "payload": { "$ref": "#/definitions/command_chat_archive" } }, "required": ["type"] },
+            { "properties": { "type": { "const": "chat.mute" }, "payload": { "$ref": "#/definitions/command_chat_mute" } }, "required": ["type"] },
             { "properties": { "type": { "const": "contact.check" }, "payload": { "$ref": "#/definitions/command_contact_check" } }, "required": ["type"] },
             { "properties": { "type": { "const": "contact.profile_picture" }, "payload": { "$ref": "#/definitions/command_contact_profile_picture" } }, "required": ["type"] },
             { "properties": { "type": { "const": "contact.info" }, "payload": { "$ref": "#/definitions/command_contact_target" } }, "required": ["type"] },
@@ -978,6 +980,26 @@
         "state": { "enum": ["composing", "recording", "paused"] }
       },
       "required": ["chat", "state"],
+      "additionalProperties": true
+    },
+    "command_chat_archive": {
+      "type": "object",
+      "properties": {
+        "chat": { "$ref": "#/definitions/address" },
+        "archive": { "type": "boolean" },
+        "last_message": { "oneOf": [{ "$ref": "#/definitions/history_anchor" }, { "type": "null" }] }
+      },
+      "required": ["chat", "archive"],
+      "additionalProperties": true
+    },
+    "command_chat_mute": {
+      "type": "object",
+      "properties": {
+        "chat": { "$ref": "#/definitions/address" },
+        "mute": { "type": "boolean" },
+        "until": { "oneOf": [{ "$ref": "#/definitions/timestamp_ms" }, { "type": "null" }] }
+      },
+      "required": ["chat", "mute"],
       "additionalProperties": true
     },
     "command_contact_check": {

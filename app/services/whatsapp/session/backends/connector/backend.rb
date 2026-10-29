@@ -275,6 +275,16 @@ class Whatsapp::Session::Backends::Connector::Backend < Whatsapp::Session::Backe
     client.publish(command, timeout: DEFERRABLE_TIMEOUT)
   end
 
+  # The same app state patch as the unread mark, and as deferrable: an archive or a mute
+  # that lands late is still the one that was asked for.
+  def archive_chat(command)
+    client.publish(command, timeout: DEFERRABLE_TIMEOUT)
+  end
+
+  def mute_chat(command)
+    client.publish(command, timeout: DEFERRABLE_TIMEOUT)
+  end
+
   # The connector keeps the bytes on its own disk and serves them over its internal HTTP
   # port; the ref that came with the event is a URL there. Those blobs are dropped on a
   # TTL and an LRU quota, so a ref that has lapsed, or one whose blob turns out to be gone
