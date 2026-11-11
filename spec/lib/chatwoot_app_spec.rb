@@ -2,6 +2,24 @@ require 'rails_helper'
 require 'chatwoot_hub'
 
 RSpec.describe ChatwootApp do
+  # Arcaconsult: custom/ with enterprise/ left out (CW_EDITION=ce) must not name a namespace
+  # that does not exist, or every prepend_mod_with crashes the boot.
+  describe '.extensions' do
+    before { allow(described_class).to receive(:custom?).and_return(true) }
+
+    it 'lists enterprise before custom when enterprise/ is in place' do
+      allow(described_class).to receive(:enterprise?).and_return(true)
+
+      expect(described_class.extensions).to eq(%w[enterprise custom])
+    end
+
+    it 'lists only custom without enterprise/' do
+      allow(described_class).to receive(:enterprise?).and_return(false)
+
+      expect(described_class.extensions).to eq(%w[custom])
+    end
+  end
+
   describe '.self_hosted_paid?' do
     let!(:chatwoot_hub) { ChatwootHub }
 

@@ -38,8 +38,11 @@ module ChatwootApp
   end
 
   def self.extensions
+    # Arcaconsult: without enterprise/ (CW_EDITION=ce since v4.19.0-fazer-ai.148, enterprise/
+    # is fetched at boot) there is no Enterprise namespace to look into, and listing it made
+    # every prepend_mod_with crash the boot (const_defined? on false).
     if custom?
-      %w[enterprise custom]
+      enterprise? ? %w[enterprise custom] : %w[custom]
     elsif enterprise?
       %w[enterprise]
     else
