@@ -119,7 +119,7 @@ RSpec.describe Whatsapp::Session::Inbound::Handlers::MessageReceived do
       )
     end
 
-    def receive(id:, ephemeral:, from_me: false, body: 'oi')
+    def deliver(id:, ephemeral:, from_me: false, body: 'oi')
       Whatsapp::Session::Inbound::Dispatcher.dispatch(
         channel,
         model::Event.build(model::Events::MessageReceived.new(
@@ -140,14 +140,14 @@ RSpec.describe Whatsapp::Session::Inbound::Handlers::MessageReceived do
 
     it 'takes the timer from a message the connected phone sent' do
       dispatch
-      receive(id: '3EB0EEEE0002', ephemeral: 86_400, from_me: true)
+      deliver(id: '3EB0EEEE0002', ephemeral: 86_400, from_me: true)
 
       expect(inbox.conversations.last.reload.additional_attributes['whatsapp_ephemeral']).to eq(86_400)
     end
 
     it 'clears it when a message arrives without one' do
       dispatch
-      receive(id: '3EB0EEEE0003', ephemeral: nil)
+      deliver(id: '3EB0EEEE0003', ephemeral: nil)
 
       expect(inbox.conversations.last.reload.additional_attributes['whatsapp_ephemeral']).to eq(0)
     end
@@ -172,7 +172,7 @@ RSpec.describe Whatsapp::Session::Inbound::Handlers::MessageReceived do
       dispatch
       conversation = inbox.conversations.last
       conversation.update!(additional_attributes: conversation.additional_attributes.merge('referral' => { 'title' => 'Promo' }))
-      receive(id: '3EB0EEEE0005', ephemeral: 0)
+      deliver(id: '3EB0EEEE0005', ephemeral: 0)
 
       expect(conversation.reload.additional_attributes).to include('referral' => { 'title' => 'Promo' }, 'whatsapp_ephemeral' => 0)
     end

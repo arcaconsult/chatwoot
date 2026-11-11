@@ -7,7 +7,7 @@
 #
 # Session-internal code does not come through here: it asks the channel for
 # `session_backend` and speaks the canonical API directly.
-class Whatsapp::Session::Facade # rubocop:disable Metrics/ClassLength -- Arcaconsult: +1 linha (include ChatState)
+class Whatsapp::Session::Facade
   include Whatsapp::Session::Facade::Groups
   include Whatsapp::Session::Facade::History
   include Whatsapp::Session::Facade::Presence

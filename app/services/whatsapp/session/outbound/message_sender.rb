@@ -51,12 +51,12 @@ class Whatsapp::Session::Outbound::MessageSender
   def reaction? = message.content_attributes['is_reaction'].present?
 
   # Arcaconsult: the chat's disappearing-message timer, as the last inbound message left it
-  # on the conversation (Inbound::MessageWriter#remember_ephemeral). Nil when the chat has
+  # on the conversation (Inbound::EphemeralTimer). Nil when the chat has
   # none, so a plain chat gets no expiration at all. Without it the reply goes out as a
   # normal message in a disappearing chat, and the phone shows the "this message will not
   # disappear" notice.
   def ephemeral
-    conversation.additional_attributes.to_h[Whatsapp::Session::Inbound::MessageWriter::EPHEMERAL_KEY].to_i.nonzero?
+    Whatsapp::Session::Inbound::EphemeralTimer.for(conversation)
   end
 
   def recipient

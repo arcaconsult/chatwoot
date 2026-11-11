@@ -6,7 +6,7 @@
 # message is stored with its file and `message_created` carries it. Everywhere else the
 # bytes are fetched by MediaFetchJob and attached afterwards: downloading inline would
 # stall the consumer thread that keeps a session's events in order.
-class Whatsapp::Session::Inbound::MessageWriter
+class Whatsapp::Session::Inbound::MessageWriter # rubocop:disable Metrics/ClassLength -- Arcaconsult: prazo da conversa temporária (EphemeralTimer)
   # The key a recovered row carries while it still owes an announcement. Written in the same save as
   # the content and taken off once the announcement is enqueued, so it names a debt rather than a fact
   # about the row's past (#646).
@@ -198,22 +198,9 @@ class Whatsapp::Session::Inbound::MessageWriter
   end
 
   def perform
-    written = write_message
+    # Before the write, because the contact-card path returns from inside it. The timer is the
+    # chat's either way, so a write that fails afterwards leaves nothing wrong behind.
     remember_ephemeral
-    written
-  end
-
-  # Arcaconsult: the conversation's disappearing-message timer, in seconds, as the last
-  # message that arrived (or that the phone itself sent) carried it, so a reply typed in
-  # Chatwoot goes out under the same timer (Outbound::MessageSender). Zero when it came
-  # without one: the chat turned disappearing messages off. Written atomically into the
-  # JSON column, only when it changes, and without the conversation's callbacks: it is
-  # bookkeeping for the sender, not something an agent or an automation acts on.
-  EPHEMERAL_KEY = 'whatsapp_ephemeral'.freeze
-
-  private
-
-  def write_message
     return build_contact_messages if content_type == 'contacts'
 
     message = conversation.messages.build(content: message_content, **message_attributes)
@@ -227,23 +214,10 @@ class Whatsapp::Session::Inbound::MessageWriter
     message
   end
 
-  # Not from history (old messages, in no particular order), nor from a placeholder or a
-  # reaction: neither carries the chat's context, and a missing timer there means nothing.
-  def remember_ephemeral
-    return if imported || content.nil? || unsupported? || %w[reaction unsupported].include?(content_type)
+  private
 
-    seconds = inbound.ephemeral.to_i
-    return if conversation.additional_attributes.to_h[EPHEMERAL_KEY] == seconds
-
-    Conversation.where(id: conversation.id).update_all(
-      [
-        "additional_attributes = COALESCE(additional_attributes, '{}'::jsonb) || jsonb_build_object(?::text, ?::integer)",
-        EPHEMERAL_KEY, seconds
-      ]
-    )
-    conversation.additional_attributes = conversation.additional_attributes.to_h.merge(EPHEMERAL_KEY => seconds)
-    conversation.clear_attribute_changes([:additional_attributes])
-  end
+  # Arcaconsult: see Inbound::EphemeralTimer. Not from history (old messages, in no particular order).
+  def remember_ephemeral = (Whatsapp::Session::Inbound::EphemeralTimer.remember(conversation, inbound) unless imported || unsupported?)
 
   def inbox = conversation.inbox
   def content = inbound.content
