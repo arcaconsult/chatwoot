@@ -23,7 +23,11 @@
       "TITLE": "La conversación ya está asignada",
       "DESCRIPTION": "{agentName} ya está atendiendo esta conversación. Pídale que la libere o pida a un administrador que la reasigne.",
       "DESCRIPTION_UNKNOWN_AGENT": "Otro agente ya está atendiendo esta conversación. Pídale que la libere o pida a un administrador que la reasigne.",
-      "CONFIRM": "Entendido"
+      "CONFIRM": "Entendido",
+      "OUTSIDE_WORKING_HOURS": {
+        "TITLE": "Bandeja fuera del horario de atención",
+        "DESCRIPTION": "Las conversaciones de esta bandeja solo se pueden asignar dentro de su horario de atención. Inténtelo de nuevo cuando abra, o pida a un administrador."
+      }
     },
     "CHANGE_TEAM_FAILED": "No se pudo cambiar el equipo",
     "MESSAGE_DELETED_BY_CONTACT": "Eliminado por el contacto",
@@ -93,6 +97,7 @@
       "BUTTON": "Cargar mensajes más antiguos",
       "HELP": "Pide al teléfono lo que vino antes. Tiene que estar encendido para responder, y se queda en silencio cuando ya envió este tramo.",
       "REQUESTED": "Le pedimos al teléfono los mensajes más antiguos. Aparecen aquí a medida que los envía.",
+      "REQUESTED_BY_DATE": "Le pedimos al teléfono los mensajes más antiguos. Cada uno va a la conversación de la fecha en que se envió, así que búscalos en las conversaciones anteriores de este contacto.",
       "ERROR": "No se pudieron pedir los mensajes más antiguos. Inténtalo de nuevo en un momento.",
       "EXHAUSTED": "No hay nada más antiguo aquí. El resto de esta conversación está solo en el teléfono."
     },
@@ -105,9 +110,6 @@
           "BEFORE_ATTRIBUTE": "{name} antes de que la regla se ejecutara"
         }
       }
-    },
-    "HEADER": {
-      "WHATSAPP_CALL_GROUP_UNSUPPORTED": "No se puede llamar a un grupo por WhatsApp"
     },
     "WHATSAPP_NUMBER_MISSING_BANNER": "Este número no tenía WhatsApp cuando se verificó el {date}. Los mensajes enviados a él no se entregan."
   },

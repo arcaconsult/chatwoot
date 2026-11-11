@@ -23,7 +23,11 @@
       "TITLE": "Conversa já atribuída",
       "DESCRIPTION": "{agentName} já está atendendo esta conversa. Peça para liberar, ou peça a um administrador para reatribuir.",
       "DESCRIPTION_UNKNOWN_AGENT": "Outro agente já está atendendo esta conversa. Peça para liberar, ou peça a um administrador para reatribuir.",
-      "CONFIRM": "Entendi"
+      "CONFIRM": "Entendi",
+      "OUTSIDE_WORKING_HOURS": {
+        "TITLE": "Caixa fora do horário de funcionamento",
+        "DESCRIPTION": "As conversas desta caixa só podem ser atribuídas dentro do horário de funcionamento. Tente de novo quando ela abrir, ou peça a um administrador."
+      }
     },
     "CHANGE_TEAM_FAILED": "Falha ao alterar o time",
     "MESSAGE_DELETED_BY_CONTACT": "Apagada pelo contato",
@@ -93,6 +97,7 @@
       "BUTTON": "Carregar mensagens mais antigas",
       "HELP": "Pede ao celular o que veio antes. Ele precisa estar ligado para responder, e fica em silêncio quando já enviou este trecho.",
       "REQUESTED": "Pedimos as mensagens mais antigas ao celular. Elas aparecem aqui conforme ele envia.",
+      "REQUESTED_BY_DATE": "Pedimos as mensagens mais antigas ao celular. Cada uma vai para a conversa da data em que foi enviada, então procure nas conversas anteriores deste contato.",
       "ERROR": "Não foi possível pedir as mensagens mais antigas. Tente de novo em instantes.",
       "EXHAUSTED": "Não há nada mais antigo aqui. O restante desta conversa está apenas no celular."
     },
@@ -105,9 +110,6 @@
           "BEFORE_ATTRIBUTE": "{name} antes da regra rodar"
         }
       }
-    },
-    "HEADER": {
-      "WHATSAPP_CALL_GROUP_UNSUPPORTED": "Não é possível ligar para um grupo pelo WhatsApp"
     },
     "WHATSAPP_NUMBER_MISSING_BANNER": "Este número não tinha WhatsApp na verificação de {date}. Mensagens enviadas para ele não são entregues."
   },

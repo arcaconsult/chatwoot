@@ -123,6 +123,8 @@ Process:
 4. For complex hunks: `git show HEAD:<path>` and `git show MERGE_HEAD:<path>` to see each full file.
 5. Decide KC/AI/CO/DEL based on intent, not just diff.
 
+**`enterprise/` and `spec/enterprise/` in an upstream → CE sync are always AI.** They stay byte-identical to the upstream release (`bin/validate_enterprise_parity`, run by CI and the pre-commit hook); the fork does not change Enterprise code, there or from outside it. After the merge, `git diff v<new> HEAD -- enterprise spec/enterprise` must be empty, and `bin/validate_enterprise_isolation` plus `bundle exec rspec spec/lint/enterprise_isolation_spec.rb` must pass: a new Enterprise method can land under a CE module that already wraps that class, and the runtime check is what notices. In a CE → Pro sync these paths cannot conflict at all, since neither side edits them.
+
 ## Recurring patterns in this repo
 
 ### Style/SaveBang noise

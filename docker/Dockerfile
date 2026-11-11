@@ -6,6 +6,16 @@ FROM node:24-alpine as node
 # feat/arquivar-silenciar-0.9.0 em ~/projects/whatsapp-connector). Ao atualizar a fazer.ai,
 # reaplicar o patch na tag nova e gerar 0.X.Y-arca.N (ver projetos/chatwoot/PLANO-WHATSAPP-ARQUIVAR.md).
 FROM arcaconsult/whatsapp-connector:0.9.0-arca.1 AS whatsapp-connector
+# The official enterprise/ for VERSION_CW, and the hash of its tree. The image never ships
+# that tree: the hash is what docker/entrypoints/helpers/enterprise.sh checks the copy it
+# downloads at boot against, and the tree itself only feeds the asset build below.
+FROM ruby:3.4.4-alpine3.21 AS enterprise-lock
+RUN apk add --no-cache curl
+WORKDIR /lock
+COPY VERSION_CW ./
+COPY docker/entrypoints/helpers/enterprise.sh docker/entrypoints/helpers/
+RUN docker/entrypoints/helpers/enterprise.sh lock /lock/out
+
 FROM ruby:3.4.4-alpine3.21 AS pre-builder
 
 ARG NODE_VERSION="24.13.0"
@@ -82,6 +92,24 @@ RUN pnpm i
 
 COPY . /app
 
+# The stylesheets are generated from every view Tailwind can see, enterprise/'s included, so
+# the assets are built with the official tree in place even though the image drops it. What
+# stays is a link from /app/enterprise to tmp/cw-enterprise, the container's own activation,
+# which docker/entrypoints/helpers/enterprise.sh points at the verified tree at boot. A
+# checkout whose enterprise/ differs from the official one fails here: the fork ships
+# Enterprise exactly as upstream publishes it, and that tree is the one that arrives at boot.
+COPY --from=enterprise-lock /lock/out/enterprise_lock /app/.enterprise_lock
+COPY --from=enterprise-lock /lock/out/enterprise /tmp/official-enterprise
+RUN pinned=$(sed -n 's/^sha256=//p' /app/.enterprise_lock) \
+  && if [ -d /app/enterprise ]; then \
+    actual=$(docker/entrypoints/helpers/enterprise.sh tree-hash /app/enterprise) \
+    && if [ "$actual" != "$pinned" ]; then \
+      echo "enterprise/ in the build context ($actual) differs from v$(cat VERSION_CW) ($pinned)" >&2; exit 1; \
+    fi; \
+  fi \
+  && rm -rf /app/enterprise \
+  && mv /tmp/official-enterprise /app/enterprise
+
 # creating a log directory so that image wont fail when RAILS_LOG_TO_STDOUT is false
 # https://github.com/chatwoot/chatwoot/issues/701
 RUN mkdir -p /app/log
@@ -89,7 +117,8 @@ RUN mkdir -p /app/log
 # generate production assets if production environment
 RUN if [ "$RAILS_ENV" = "production" ]; then \
   SECRET_KEY_BASE=precompile_placeholder RAILS_LOG_TO_STDOUT=enabled bundle exec rake assets:precompile \
-  && rm -rf spec node_modules tmp/cache; \
+  && rm -rf spec node_modules tmp/cache enterprise \
+  && ln -s tmp/cw-enterprise enterprise; \
   fi
 
 # Generate .git_sha file with current commit hash
@@ -135,6 +164,7 @@ RUN apk update && apk add --no-cache \
   git \
   vips \
   ffmpeg \
+  curl \
   && gem install bundler -v "$BUNDLER_VERSION"
 
 # Restrict libvips to its trusted image loaders when generating variants
@@ -144,8 +174,7 @@ COPY --from=node /usr/local/bin/node /usr/local/bin/
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN if [ "$RAILS_ENV" != "production" ]; then \
-  apk add --no-cache curl \
-  && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+  ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
   && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
   && npm install -g pnpm@${PNPM_VERSION} \
   && pnpm --version; \
