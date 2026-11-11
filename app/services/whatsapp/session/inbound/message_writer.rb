@@ -198,6 +198,22 @@ class Whatsapp::Session::Inbound::MessageWriter
   end
 
   def perform
+    written = write_message
+    remember_ephemeral
+    written
+  end
+
+  # Arcaconsult: the conversation's disappearing-message timer, in seconds, as the last
+  # message that arrived (or that the phone itself sent) carried it, so a reply typed in
+  # Chatwoot goes out under the same timer (Outbound::MessageSender). Zero when it came
+  # without one: the chat turned disappearing messages off. Written atomically into the
+  # JSON column, only when it changes, and without the conversation's callbacks: it is
+  # bookkeeping for the sender, not something an agent or an automation acts on.
+  EPHEMERAL_KEY = 'whatsapp_ephemeral'.freeze
+
+  private
+
+  def write_message
     return build_contact_messages if content_type == 'contacts'
 
     message = conversation.messages.build(content: message_content, **message_attributes)
@@ -211,7 +227,23 @@ class Whatsapp::Session::Inbound::MessageWriter
     message
   end
 
-  private
+  # Not from history (old messages, in no particular order), nor from a placeholder or a
+  # reaction: neither carries the chat's context, and a missing timer there means nothing.
+  def remember_ephemeral
+    return if imported || content.nil? || unsupported? || %w[reaction unsupported].include?(content_type)
+
+    seconds = inbound.ephemeral.to_i
+    return if conversation.additional_attributes.to_h[EPHEMERAL_KEY] == seconds
+
+    Conversation.where(id: conversation.id).update_all(
+      [
+        "additional_attributes = COALESCE(additional_attributes, '{}'::jsonb) || jsonb_build_object(?::text, ?::integer)",
+        EPHEMERAL_KEY, seconds
+      ]
+    )
+    conversation.additional_attributes = conversation.additional_attributes.to_h.merge(EPHEMERAL_KEY => seconds)
+    conversation.clear_attribute_changes([:additional_attributes])
+  end
 
   def inbox = conversation.inbox
   def content = inbound.content

@@ -109,6 +109,75 @@ RSpec.describe Whatsapp::Session::Inbound::Handlers::MessageReceived do
     expect(inbox.conversations.last.additional_attributes['referral']).to include('title' => 'Promo')
   end
 
+  # Arcaconsult: the reply typed in Chatwoot has to go out under the chat's disappearing
+  # timer, and the only place that timer shows up is on the messages that arrive.
+  context 'with a disappearing-messages chat' do
+    let(:inbound) do
+      model::InboundMessage.new(
+        id: '3EB0EEEE0001', chat: chat, sender: sender, from_me: false,
+        timestamp: 1_755_440_000_123, content: content, ephemeral: 604_800
+      )
+    end
+
+    def receive(id:, ephemeral:, from_me: false, body: 'oi')
+      Whatsapp::Session::Inbound::Dispatcher.dispatch(
+        channel,
+        model::Event.build(model::Events::MessageReceived.new(
+                             message: model::InboundMessage.new(
+                               id: id, chat: chat, sender: from_me ? nil : sender, from_me: from_me,
+                               timestamp: 1_755_440_000_123, content: model::Content::Text.new(body: body),
+                               ephemeral: ephemeral
+                             )
+                           ))
+      )
+    end
+
+    it 'keeps the timer on the conversation' do
+      expect(dispatch).to eq(:handled)
+
+      expect(inbox.conversations.last.reload.additional_attributes['whatsapp_ephemeral']).to eq(604_800)
+    end
+
+    it 'takes the timer from a message the connected phone sent' do
+      dispatch
+      receive(id: '3EB0EEEE0002', ephemeral: 86_400, from_me: true)
+
+      expect(inbox.conversations.last.reload.additional_attributes['whatsapp_ephemeral']).to eq(86_400)
+    end
+
+    it 'clears it when a message arrives without one' do
+      dispatch
+      receive(id: '3EB0EEEE0003', ephemeral: nil)
+
+      expect(inbox.conversations.last.reload.additional_attributes['whatsapp_ephemeral']).to eq(0)
+    end
+
+    it 'leaves the timer alone on a placeholder for a message that could not be read' do
+      dispatch
+      Whatsapp::Session::Inbound::Dispatcher.dispatch(
+        channel,
+        model::Event.build(model::Events::MessageReceived.new(
+                             message: model::InboundMessage.new(
+                               id: '3EB0EEEE0004', chat: chat, sender: sender, from_me: false,
+                               timestamp: 1_755_440_000_123,
+                               content: model::Content::Unsupported.new(reason: 'undecryptable')
+                             )
+                           ))
+      )
+
+      expect(inbox.conversations.last.reload.additional_attributes['whatsapp_ephemeral']).to eq(604_800)
+    end
+
+    it 'keeps what else the conversation carries' do
+      dispatch
+      conversation = inbox.conversations.last
+      conversation.update!(additional_attributes: conversation.additional_attributes.merge('referral' => { 'title' => 'Promo' }))
+      receive(id: '3EB0EEEE0005', ephemeral: 0)
+
+      expect(conversation.reload.additional_attributes).to include('referral' => { 'title' => 'Promo' }, 'whatsapp_ephemeral' => 0)
+    end
+  end
+
   context 'when the message came from the connected phone' do
     let(:inbound) do
       model::InboundMessage.new(

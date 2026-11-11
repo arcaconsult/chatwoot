@@ -39,6 +39,30 @@ RSpec.describe Whatsapp::Session::Outbound::MessageSender do
     ).to eq(message)
   end
 
+  # Arcaconsult: a reply in a disappearing chat went out as a normal message, and the
+  # contact's phone showed it as the one message that would not disappear.
+  it 'sends under the chat\'s disappearing timer when the conversation has one' do
+    conversation.update!(additional_attributes: { 'whatsapp_ephemeral' => 604_800 })
+
+    send_message
+
+    expect(backend.last_command.ephemeral).to eq(604_800)
+  end
+
+  it 'sends without a timer when the chat has none' do
+    conversation.update!(additional_attributes: { 'whatsapp_ephemeral' => 0 })
+
+    send_message
+
+    expect(backend.last_command.ephemeral).to be_nil
+  end
+
+  it 'sends without a timer when nothing is known about the chat' do
+    send_message
+
+    expect(backend.last_command.ephemeral).to be_nil
+  end
+
   it 'reuses the reservation when the job runs twice' do
     send_message
     reserved = message.pending_source_id
